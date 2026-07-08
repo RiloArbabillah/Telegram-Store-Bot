@@ -317,6 +317,38 @@ def main():
     )
     application.add_handler(config_logo_conv)
 
+    # QRIS instructions configuration conversation
+    config_qris_instructions_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_conversations.config_qris_instructions, pattern="^admin_qris_instructions$")],
+        states={
+            admin_conversations.SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_conversations.setting_value)],
+        },
+        fallbacks=[
+            MessageHandler(filters.COMMAND, admin_conversations.cancel_settings),
+            CallbackQueryHandler(admin_conversations.cancel_settings, pattern="^cancel$")
+        ],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+    )
+    application.add_handler(config_qris_instructions_conv)
+
+    # QRIS image configuration conversation
+    config_qris_image_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_conversations.config_qris_image, pattern="^admin_qris_image$")],
+        states={
+            admin_conversations.QRIS_IMAGE: [MessageHandler(filters.PHOTO, admin_conversations.qris_image_value)],
+        },
+        fallbacks=[
+            MessageHandler(filters.COMMAND, admin_conversations.cancel_settings),
+            CallbackQueryHandler(admin_conversations.cancel_settings, pattern="^cancel$")
+        ],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+    )
+    application.add_handler(config_qris_image_conv)
+
     # Text-only broadcast conversation
     broadcast_text_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_conversations.broadcast_text_start, pattern="^admin_broadcast_text$")],
@@ -405,6 +437,7 @@ def main():
     application.add_handler(CallbackQueryHandler(user_handlers.support_callback, pattern="^support$"))
     application.add_handler(CallbackQueryHandler(user_handlers.order_history_callback, pattern="^order_history"))
     application.add_handler(CallbackQueryHandler(user_handlers.user_order_detail_callback, pattern="^user_order_detail_"))
+    application.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, payment_handlers.qris_proof_submission))
 
     # Purchase confirmation and cancellation handlers
     application.add_handler(CallbackQueryHandler(payment_handlers.confirm_purchase, pattern="^confirm_purchase_"))

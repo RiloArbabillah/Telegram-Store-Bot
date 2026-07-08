@@ -34,8 +34,8 @@ SETTING_VALUE = range(1)
 # Conversation states for broadcast
 BROADCAST_TEXT, BROADCAST_IMAGE = range(2)
 
-# Conversation states for welcome message and store logo
-WELCOME_MESSAGE, STORE_LOGO = range(2)
+# Conversation states for welcome message and media settings
+WELCOME_MESSAGE, STORE_LOGO, QRIS_IMAGE = range(3)
 
 
 # ==================== PRODUCT CREATION FLOW ====================
@@ -1648,7 +1648,8 @@ async def config_channel_username(update: Update, context: ContextTypes.DEFAULT_
 async def setting_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle setting value input."""
     setting_type = context.user_data['setting_type']
-    value = update.message.text.strip().replace('@', '')
+    raw_value = update.message.text.strip()
+    value = raw_value.replace('@', '')
 
     with get_db_session() as session:
         settings = session.query(Settings).first()
@@ -1663,6 +1664,9 @@ async def setting_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif setting_type == 'channel_username':
             settings.channel_username = value
             await update.message.reply_text(f"✅ Channel username set to: @{value}")
+        elif setting_type == 'qris_instructions_text':
+            settings.qris_instructions_text = raw_value
+            await update.message.reply_text("✅ QRIS instructions updated successfully!")
 
         settings.updated_at = datetime.utcnow()
         session.commit()
@@ -1942,6 +1946,30 @@ async def welcome_message_value(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+async def config_qris_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start QRIS instructions configuration flow."""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(update.effective_user.id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return ConversationHandler.END
+
+    with get_db_session() as session:
+        settings = session.query(Settings).first()
+        current_text = settings.qris_instructions_text if settings and settings.qris_instructions_text else "Not set"
+
+    from utils import create_cancel_keyboard
+    await query.edit_message_text(
+        f"📱 QRIS Instructions Configuration\n\n"
+        f"Current instructions:\n{current_text}\n\n"
+        f"Send the QRIS payment instructions text that users should see.",
+        reply_markup=create_cancel_keyboard()
+    )
+    context.user_data['setting_type'] = 'qris_instructions_text'
+    return SETTING_VALUE
+
+
 # ==================== STORE LOGO FLOW ====================
 
 async def config_store_logo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1969,6 +1997,31 @@ async def config_store_logo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data['setting_type'] = 'store_logo'
     return STORE_LOGO
+
+
+async def config_qris_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start QRIS image configuration flow."""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(update.effective_user.id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return ConversationHandler.END
+
+    with get_db_session() as session:
+        settings = session.query(Settings).first()
+        has_image = bool(settings and settings.qris_image_file_id)
+
+    from utils import create_cancel_keyboard
+    status_text = "✅ QRIS image is set" if has_image else "❌ No QRIS image set"
+    await query.edit_message_text(
+        f"🧾 QRIS Image Configuration\n\n"
+        f"Current status: {status_text}\n\n"
+        f"Please send the QRIS image that users should use for payment.",
+        reply_markup=create_cancel_keyboard()
+    )
+    context.user_data['setting_type'] = 'qris_image'
+    return QRIS_IMAGE
 
 
 async def store_logo_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2011,6 +2064,31 @@ async def store_logo_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Store logo updated successfully!",
             reply_markup=create_admin_settings_menu_keyboard()
         )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def qris_image_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle new QRIS image upload."""
+    from utils import create_admin_settings_menu_keyboard
+
+    photo = update.message.photo[-1]
+
+    with get_db_session() as session:
+        settings = session.query(Settings).first()
+        if not settings:
+            settings = Settings()
+            session.add(settings)
+
+        settings.qris_image_file_id = photo.file_id
+        settings.updated_at = datetime.utcnow()
+        session.commit()
+
+    await update.message.reply_text(
+        "✅ QRIS image updated successfully!",
+        reply_markup=create_admin_settings_menu_keyboard()
+    )
 
     context.user_data.clear()
     return ConversationHandler.END

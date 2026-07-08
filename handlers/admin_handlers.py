@@ -17,7 +17,7 @@ from utils import (
     create_admin_broadcast_menu_keyboard, parse_keys_from_text, clear_ban_cache
 )
 from config.settings import settings as app_settings
-from services.payments import hydrate_legacy_transaction, payment_method_label
+from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
@@ -28,6 +28,10 @@ def _admin_payment_label(transaction):
     """Build a concise provider-aware payment label for admin menus."""
     hydrate_legacy_transaction(transaction)
     method_label = payment_method_label(transaction.payment_method)
+    if transaction.payment_method.value == "qris":
+        if transaction.proof_submitted_at:
+            return f"{method_label} (proof sent)"
+        return f"{method_label} (awaiting proof)"
     if transaction.provider_name and transaction.provider_name not in {"cryptobot", "telegram_payments", "qris"}:
         return f"{method_label} ({transaction.provider_name})"
     return method_label
@@ -1233,7 +1237,6 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
 
     with get_db_session() as session:
         from database import Transaction, TransactionStatus
-        from datetime import datetime
 
         txn = session.query(Transaction).filter_by(id=txn_id).first()
 
@@ -1245,17 +1248,10 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
             await query.answer(f"⚠️ Transaction is already {txn.status.value}", show_alert=True)
             return
 
-        # Add funds to user's wallet
-        user = session.query(User).filter_by(id=txn.user_id).first()
-        if user:
-            user.wallet_balance += txn.amount
-
-        # Mark transaction as completed
-        txn.status = TransactionStatus.COMPLETED
-        txn.completed_at = datetime.utcnow()
+        notification = complete_transaction(session, txn)
         session.commit()
 
-        # Get details before session closes
+        user = session.query(User).filter_by(id=txn.user_id).first()
         user_telegram_id = user.telegram_id if user else None
         amount = txn.amount
         new_balance = user.wallet_balance if user else 0
@@ -1263,11 +1259,16 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
         await query.answer(f"✅ Payment confirmed! {format_price(amount)} added to user's wallet.", show_alert=True)
 
         # Notify user
-        if user_telegram_id:
+        if user_telegram_id and notification:
             try:
                 await context.bot.send_message(
                     chat_id=user_telegram_id,
-                    text=f"✅ Payment Confirmed!\n\n💰 Amount: {format_price(amount)}\n💵 New Balance: {format_price(new_balance)}"
+                    text=(
+                        f"✅ Payment Confirmed!\n\n"
+                        f"💳 Method: {_admin_payment_label(txn)}\n"
+                        f"💰 Amount: {format_price(amount)}\n"
+                        f"💵 New Balance: {format_price(new_balance)}"
+                    )
                 )
             except:
                 pass

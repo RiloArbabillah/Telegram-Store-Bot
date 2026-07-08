@@ -179,6 +179,8 @@ def create_admin_settings_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("💬 Welcome Message", callback_data="admin_welcome_msg")],
         [InlineKeyboardButton("🖼 Store Logo", callback_data="admin_store_logo")],
+        [InlineKeyboardButton("📱 QRIS Instructions", callback_data="admin_qris_instructions")],
+        [InlineKeyboardButton("🧾 QRIS Image", callback_data="admin_qris_image")],
         [InlineKeyboardButton("📞 Support Username", callback_data="admin_support_username")],
         [InlineKeyboardButton("📢 Channel Username", callback_data="admin_channel_username")],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_menu")]

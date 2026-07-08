@@ -17,10 +17,20 @@ from utils import (
     create_admin_broadcast_menu_keyboard, parse_keys_from_text, clear_ban_cache
 )
 from config.settings import settings as app_settings
+from services.payments import hydrate_legacy_transaction, payment_method_label
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
 WAITING_FOR_KEYS = 1
+
+
+def _admin_payment_label(transaction):
+    """Build a concise provider-aware payment label for admin menus."""
+    hydrate_legacy_transaction(transaction)
+    method_label = payment_method_label(transaction.payment_method)
+    if transaction.provider_name and transaction.provider_name not in {"cryptobot", "telegram_payments", "qris"}:
+        return f"{method_label} ({transaction.provider_name})"
+    return method_label
 
 
 @admin_only
@@ -1152,7 +1162,7 @@ async def admin_confirm_order_menu(update: Update, context: ContextTypes.DEFAULT
             user = session.query(User).filter_by(id=txn.user_id).first()
             username = user.username if user and user.username else f"ID:{user.telegram_id if user else 'Unknown'}"
 
-            payment_method = txn.payment_method.value.replace('_', ' ').title()
+            payment_method = _admin_payment_label(txn)
 
             button_text = f"⏳ Txn #{txn.id} | @{username} | {format_price(txn.amount)} | {payment_method}"
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"confirm_payment_{txn.id}")])
@@ -1197,7 +1207,7 @@ async def admin_cancel_order_menu(update: Update, context: ContextTypes.DEFAULT_
             user = session.query(User).filter_by(id=txn.user_id).first()
             username = user.username if user and user.username else f"ID:{user.telegram_id if user else 'Unknown'}"
 
-            payment_method = txn.payment_method.value.replace('_', ' ').title()
+            payment_method = _admin_payment_label(txn)
             button_text = f"⏳ Txn #{txn.id} | @{username} | {format_price(txn.amount)} | {payment_method}"
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"cancel_payment_{txn.id}")])
 

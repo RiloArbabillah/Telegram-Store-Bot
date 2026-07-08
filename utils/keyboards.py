@@ -84,13 +84,19 @@ def create_cancel_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
-def create_payment_method_keyboard():
+def create_payment_method_keyboard(payment_options=None):
     """Create payment method selection keyboard."""
+    if payment_options is None:
+        payment_options = [
+            ("🪙 CryptoBot", "pay_crypto_wallet"),
+            ("💳 Card", "pay_card"),
+        ]
+
     keyboard = [
-        [InlineKeyboardButton("🪙 CryptoBot", callback_data="pay_crypto")],
-        [InlineKeyboardButton("💳 Card", callback_data="pay_card")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
+        [InlineKeyboardButton(label, callback_data=callback_data)]
+        for label, callback_data in payment_options
     ]
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(keyboard)
 
 

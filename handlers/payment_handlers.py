@@ -1,6 +1,7 @@
 """Payment and wallet management handlers."""
 
 from datetime import datetime
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import ContextTypes, ConversationHandler
 from database import (
@@ -11,10 +12,16 @@ from utils import (
     get_or_create_user, format_price, validate_amount,
     create_cancel_keyboard, create_payment_method_keyboard,
     create_quantity_keyboard, create_main_menu_keyboard,
-    calculate_expiry_time, notify_admin, check_user_banned
+    notify_admin, check_user_banned
 )
-from config.settings import settings as app_settings
-from services.crypto_bot import CryptoBotService
+from services.payments import (
+    PaymentCreationError,
+    get_provider,
+    get_provider_by_callback,
+    hydrate_legacy_transaction,
+    list_payment_options,
+    list_payment_providers,
+)
 
 # Conversation states for top-up
 AMOUNT, METHOD = range(2)
@@ -55,249 +62,123 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Store amount in context
     context.user_data['topup_amount'] = amount
 
-    # Show payment method selection directly (skip crypto selection for CryptoBot)
+    payment_options = [
+        (option.label, f"pay_{option.method.value}")
+        for option in list_payment_options()
+    ]
+
     message = f"💰 Amount: ${amount:.2f}\n\n💬 Please choose a payment method:"
 
     await update.message.reply_text(
         message,
-        reply_markup=create_payment_method_keyboard()
+        reply_markup=create_payment_method_keyboard(payment_options)
     )
 
     return METHOD
 
 
-async def payment_method_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle Crypto Wallet payment method selection."""
+def _payment_page_markup(payment_page):
+    """Build inline keyboard markup for a payment page."""
+    if payment_page.button_text and payment_page.button_url:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(payment_page.button_text, url=payment_page.button_url)],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
+        ])
+
+    return None
+
+
+def _build_payment_notifications(notif):
+    """Build user/admin confirmation messages for a completed payment."""
+    user_message = f"""✅ Payment Confirmed!
+
+💳 Method: {notif.payment_method}
+💰 Amount: {format_price(notif.amount)}
+🔄 Your new wallet balance: {format_price(notif.new_balance)}
+
+Thank you for your payment!"""
+
+    admin_message = f"""💰 New Payment Received
+
+👤 User ID: {notif.user_telegram_id}
+💰 Amount: {format_price(notif.amount)}
+📝 Transaction ID: #{notif.transaction_id}
+🔄 Payment Method: {notif.payment_method}"""
+
+    return user_message, admin_message
+
+
+async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle provider-driven payment method selection."""
     query = update.callback_query
     await query.answer()
 
-    usd_amount = context.user_data.get('topup_amount', 0)
-    user_id = update.effective_user.id
-
-    with get_db_session() as session:
-        user = session.query(User).filter_by(telegram_id=user_id).first()
-
-        if not user:
-            await query.edit_message_text("❌ User not found.")
-            return ConversationHandler.END
-
-        # Check if user already has a pending CryptoBot transaction
-        existing_pending = session.query(Transaction).filter_by(
-            user_id=user.id,
-            payment_method=PaymentMethod.CRYPTO_WALLET,
-            status=TransactionStatus.PENDING
-        ).first()
-
-        if existing_pending:
-            # Show full payment details for the existing pending order
-            # Extract pay_url from crypto_address (format: "invoice_id|pay_url")
-            if existing_pending.crypto_address and "|" in existing_pending.crypto_address:
-                invoice_id, pay_url = existing_pending.crypto_address.split("|", 1)
-            else:
-                pay_url = existing_pending.crypto_address if existing_pending.crypto_address else "#"
-
-            message = f"""⚠️ You already have a pending CryptoBot payment!
-
-💬 CryptoBot Payment
-
-💰 Amount: {format_price(existing_pending.amount)}
-🆔 Order ID: #{existing_pending.id}
-
-Click the button below to complete your payment. You can pay with ANY cryptocurrency supported by CryptoBot:
-
-✅ BTC (Bitcoin)
-✅ TON (Toncoin)
-✅ USDT (TRC20, TON)
-✅ USDC (TRC20, TON)
-✅ ETH (Ethereum)
-✅ LTC (Litecoin)
-✅ BNB (Binance Coin)
-✅ TRX (Tron)
-And many more!
-
-The system will automatically verify and add ${existing_pending.amount:.2f} to your balance as soon as your payment is confirmed.
-
-⏰ Expires: {existing_pending.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if existing_pending.expires_at else 'N/A'}
-
-You cannot create a new order until this one is completed or expired."""
-
-            # Create keyboard with payment button
-            keyboard = [
-                [InlineKeyboardButton("💳 Pay with Any Crypto", url=pay_url)],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await query.edit_message_text(
-                message,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            return ConversationHandler.END
-
-        # Create transaction record
-        transaction = Transaction(
-            user_id=user.id,
-            amount=usd_amount,
-            payment_method=PaymentMethod.CRYPTO_WALLET,
-            status=TransactionStatus.PENDING,
-            expires_at=calculate_expiry_time(app_settings.PAYMENT_EXPIRY_HOURS)
-        )
-        session.add(transaction)
-        session.commit()
-        session.refresh(transaction)
-
-        # Generate payment invoice in USD (accepts any cryptocurrency)
-        crypto_service = CryptoBotService()
-        payment_address = crypto_service.generate_payment_address(
-            usd_amount,
-            transaction.id
-        )
-
-        if not payment_address:
-            transaction.status = TransactionStatus.FAILED
-            session.commit()
-            await query.edit_message_text("❌ Failed to generate payment invoice. Please try again.")
-            return ConversationHandler.END
-
-        # Update transaction with crypto address (format: "invoice_id|pay_url")
-        transaction.crypto_address = payment_address
-        session.commit()
-
-        # Extract pay_url from payment_address
-        if "|" in payment_address:
-            invoice_id, pay_url = payment_address.split("|", 1)
-            print(f"Invoice created: ID={invoice_id}, URL={pay_url}")
-        else:
-            # Fallback for unexpected format
-            pay_url = payment_address
-
-        # Show payment instructions
-        message = f"""💬 CryptoBot Payment
-
-💰 Amount: {format_price(usd_amount)}
-🆔 Order ID: #{transaction.id}
-
-Click the button below to open the payment page. You can pay with ANY cryptocurrency supported by CryptoBot:
-
-✅ BTC (Bitcoin)
-✅ TON (Toncoin)
-✅ USDT (TRC20, TON)
-✅ USDC (TRC20, TON)
-✅ ETH (Ethereum)
-✅ LTC (Litecoin)
-✅ BNB (Binance Coin)
-✅ TRX (Tron)
-And many more!
-
-The system will automatically verify and add ${usd_amount:.2f} to your balance as soon as your payment is confirmed.
-
-⏰ This order will expire in 30 Minutes."""
-
-        # Create keyboard with payment button
-        keyboard = [
-            [InlineKeyboardButton("💳 Pay with Any Crypto", url=pay_url)],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(message, reply_markup=reply_markup)
-
-    return ConversationHandler.END
-
-
-async def payment_method_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle Card payment via Telegram Payments (native sendInvoice flow)."""
-    query = update.callback_query
-    await query.answer()
-
-    usd_amount = context.user_data.get('topup_amount', 0)
-    user_id = update.effective_user.id
-
-    provider_token = app_settings.TELEGRAM_PROVIDER_TOKEN
-    if not provider_token:
-        await query.edit_message_text(
-            "❌ Card payments are not configured yet.\n\nPlease choose another payment method or contact support.",
-            reply_markup=create_cancel_keyboard()
-        )
+    provider = get_provider_by_callback(query.data)
+    if not provider:
+        await query.edit_message_text("❌ Unknown payment method. Please start again.")
         return ConversationHandler.END
+
+    usd_amount = context.user_data.get('topup_amount', 0)
+    user_id = update.effective_user.id
 
     if usd_amount <= 0:
         await query.edit_message_text("❌ Invalid amount. Please start the top-up again.")
         return ConversationHandler.END
 
-    # Create a pending transaction; its id is carried in the invoice payload.
-    # Card transactions have no expires_at: confirmation arrives via Telegram's
-    # successful_payment update, so the expiry job should not touch them.
     with get_db_session() as session:
         user = session.query(User).filter_by(telegram_id=user_id).first()
         if not user:
             await query.edit_message_text("❌ User not found.")
             return ConversationHandler.END
 
-        transaction = Transaction(
-            user_id=user.id,
-            amount=usd_amount,
-            payment_method=PaymentMethod.CARD,
-            status=TransactionStatus.PENDING
-        )
-        session.add(transaction)
-        session.commit()
-        session.refresh(transaction)
-        transaction_id = transaction.id
+        try:
+            _, payment_page = provider.create_payment(session, user, usd_amount)
+        except PaymentCreationError as exc:
+            payment_options = [
+                (option.label, f"pay_{option.method.value}")
+                for option in list_payment_options()
+            ]
+            await query.edit_message_text(
+                str(exc),
+                reply_markup=create_payment_method_keyboard(payment_options),
+            )
+            return METHOD
 
-    # Replace the method-selection message with a short notice, then send the invoice.
-    try:
         await query.edit_message_text(
-            f"""💳 Card Payment
-
-💰 Amount: {format_price(usd_amount)}
-🆔 Order ID: #{transaction_id}
-
-Please complete the secure card payment below 👇"""
+            payment_page.message,
+            reply_markup=_payment_page_markup(payment_page),
         )
-    except Exception:
-        pass
 
-    # Telegram expects the price in the smallest currency unit (e.g. cents for USD).
-    prices = [LabeledPrice(label="Wallet Top-up", amount=int(round(usd_amount * 100)))]
-
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="Wallet Top-up",
-        description=f"Add {format_price(usd_amount)} to your wallet balance.",
-        payload=f"topup_{transaction_id}",
-        provider_token=provider_token,
-        currency=app_settings.PAYMENT_CURRENCY,
-        prices=prices,
-        start_parameter=f"topup-{transaction_id}"
-    )
+        if payment_page.invoice_request:
+            prices = [
+                LabeledPrice(label=label, amount=minor_units)
+                for label, minor_units in payment_page.invoice_request["prices"]
+            ]
+            await context.bot.send_invoice(
+                chat_id=update.effective_chat.id,
+                title=payment_page.invoice_request["title"],
+                description=payment_page.invoice_request["description"],
+                payload=payment_page.invoice_request["payload"],
+                provider_token=payment_page.invoice_request["provider_token"],
+                currency=payment_page.invoice_request["currency"],
+                prices=prices,
+                start_parameter=payment_page.invoice_request["start_parameter"],
+            )
 
     return ConversationHandler.END
 
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Approve the pre-checkout query if it maps to a valid pending card top-up."""
+    """Approve the pre-checkout query if it maps to a valid pending payment."""
     query = update.pre_checkout_query
     payload = query.invoice_payload or ""
 
-    transaction_id = None
-    if payload.startswith("topup_"):
-        try:
-            transaction_id = int(payload.split("_", 1)[1])
-        except (ValueError, IndexError):
-            transaction_id = None
-
     is_valid = False
-    if transaction_id is not None:
-        with get_db_session() as session:
-            transaction = session.query(Transaction).filter_by(
-                id=transaction_id,
-                payment_method=PaymentMethod.CARD
-            ).first()
-            # Allow if not already credited (PENDING, or EXPIRED for a late-but-honoured pay).
-            if transaction and transaction.status != TransactionStatus.COMPLETED:
+    with get_db_session() as session:
+        for provider in list_payment_providers():
+            if provider.validate_precheckout_payload(session, payload):
                 is_valid = True
+                break
 
     if is_valid:
         await query.answer(ok=True)
@@ -309,68 +190,22 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Credit the wallet once Telegram confirms a successful card payment."""
+    """Credit the wallet once Telegram confirms a successful payment."""
     payment = update.message.successful_payment
     payload = payment.invoice_payload or ""
 
-    if not payload.startswith("topup_"):
-        return
-
-    try:
-        transaction_id = int(payload.split("_", 1)[1])
-    except (ValueError, IndexError):
-        return
-
     notif = None
     with get_db_session() as session:
-        transaction = session.query(Transaction).filter_by(
-            id=transaction_id,
-            payment_method=PaymentMethod.CARD
-        ).first()
-
-        if not transaction:
-            return
-
-        # Idempotency guard: never double-credit a completed transaction.
-        if transaction.status == TransactionStatus.COMPLETED:
-            return
-
-        transaction.status = TransactionStatus.COMPLETED
-        transaction.completed_at = datetime.utcnow()
-        # Store Telegram's charge id in crypto_address for reference.
-        transaction.crypto_address = f"tg_charge:{payment.telegram_payment_charge_id}"
-
-        user = session.query(User).filter_by(id=transaction.user_id).first()
-        if user:
-            user.wallet_balance += transaction.amount
-            session.commit()
-            notif = {
-                'telegram_id': user.telegram_id,
-                'amount': transaction.amount,
-                'new_balance': user.wallet_balance,
-                'transaction_id': transaction.id
-            }
+        for provider in list_payment_providers():
+            notif = provider.handle_successful_payment(session, payload, payment)
+            if notif:
+                break
 
     if not notif:
         return
 
-    user_message = f"""✅ Payment Confirmed!
-
-💳 Method: Card
-💰 Amount: {format_price(notif['amount'])}
-🔄 Your new wallet balance: {format_price(notif['new_balance'])}
-
-Thank you for your payment!"""
-
+    user_message, admin_message = _build_payment_notifications(notif)
     await update.message.reply_text(user_message, reply_markup=create_main_menu_keyboard())
-
-    admin_message = f"""💳 New Card Payment Received
-
-👤 User ID: {notif['telegram_id']}
-💰 Amount: {format_price(notif['amount'])}
-📝 Transaction ID: #{notif['transaction_id']}
-🔄 Payment Method: Card"""
-
     await notify_admin(context, admin_message)
 
 
@@ -422,35 +257,16 @@ async def check_pending_payments(context: ContextTypes.DEFAULT_TYPE):
             ).all()
 
             for transaction in pending_transactions:
+                hydrate_legacy_transaction(transaction)
+
                 # Check if transaction has expired
                 if transaction.expires_at and datetime.utcnow() > transaction.expires_at:
                     continue  # Will be handled by check_expired_payments
 
-                # Verify payment based on payment method
-                is_paid = False
-                if transaction.payment_method == PaymentMethod.CRYPTO_WALLET:
-                    crypto_service = CryptoBotService()
-                    is_paid = crypto_service.check_payment_status(transaction.crypto_address, transaction.amount)
-
-                if is_paid:
-                    # Update transaction status
-                    transaction.status = TransactionStatus.COMPLETED
-                    transaction.completed_at = datetime.utcnow()
-
-                    # Update user wallet balance
-                    user = session.query(User).filter_by(id=transaction.user_id).first()
-                    if user:
-                        user.wallet_balance += transaction.amount
-                        session.commit()
-
-                        # Store notification data
-                        payment_notifications.append({
-                            'user_telegram_id': user.telegram_id,
-                            'amount': transaction.amount,
-                            'new_balance': user.wallet_balance,
-                            'transaction_id': transaction.id,
-                            'payment_method': transaction.payment_method.value
-                        })
+                provider = get_provider(transaction.payment_method)
+                notification = provider.poll_transaction(session, transaction)
+                if notification:
+                    payment_notifications.append(notification)
 
         return payment_notifications
 
@@ -459,29 +275,15 @@ async def check_pending_payments(context: ContextTypes.DEFAULT_TYPE):
 
     # Send notifications asynchronously
     for notif in notifications:
-        # Notify user
-        user_message = f"""✅ Payment Confirmed!
-
-💰 Amount: {format_price(notif['amount'])}
-🔄 Your new wallet balance: {format_price(notif['new_balance'])}
-
-Thank you for your payment!"""
+        user_message, admin_message = _build_payment_notifications(notif)
 
         try:
             await context.bot.send_message(
-                chat_id=notif['user_telegram_id'],
+                chat_id=notif.user_telegram_id,
                 text=user_message
             )
         except Exception:
             pass
-
-        # Notify admin
-        admin_message = f"""💰 New Payment Received
-
-👤 User ID: {notif['user_telegram_id']}
-💰 Amount: {format_price(notif['amount'])}
-📝 Transaction ID: #{notif['transaction_id']}
-🔄 Payment Method: {notif['payment_method']}"""
 
         await notify_admin(context, admin_message)
 

@@ -41,6 +41,7 @@ class PaymentMethod(enum.Enum):
     """Enum for payment methods."""
     CRYPTO_WALLET = "crypto_wallet"
     CARD = "card"
+    QRIS = "qris"
 
 
 class User(Base):
@@ -189,6 +190,11 @@ class Transaction(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
     amount = Column(Float, nullable=False)
     payment_method = Column(Enum(PaymentMethod), nullable=False)
+    provider_name = Column(String(100), nullable=True)
+    external_reference = Column(String(255), nullable=True)
+    checkout_url = Column(String(500), nullable=True)
+    qr_payload = Column(Text, nullable=True)
+    provider_metadata = Column(Text, nullable=True)
     crypto_address = Column(String(500), nullable=True)
     status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,3 +1,5 @@
 """Services package for external API integrations."""
 
-__all__ = []
+from .crypto_bot import CryptoBotService
+
+__all__ = ["CryptoBotService"]

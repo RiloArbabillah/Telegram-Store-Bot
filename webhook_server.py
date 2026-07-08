@@ -1,7 +1,7 @@
-"""Webhook server for receiving CryptoBot payment notifications.
+"""Webhook server for receiving payment provider notifications.
 
-This server receives real-time payment notifications from CryptoBot
-when invoices are paid, providing immediate payment confirmation.
+This server receives real-time payment notifications from supported
+providers and applies the same normalized transaction finalization flow.
 
 Setup:
 1. Install Flask: pip install flask
@@ -19,8 +19,9 @@ import hashlib
 import json
 from datetime import datetime
 from database.db import get_db_session
-from database.models import Transaction, TransactionStatus, User
 from config.settings import settings
+from services.payments import get_provider
+from database import PaymentMethod
 
 app = Flask(__name__)
 
@@ -50,72 +51,22 @@ def verify_signature(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(calculated_signature, signature)
 
 
-def process_invoice_paid(invoice_data: dict):
-    """
-    Process a paid invoice notification.
+def process_provider_webhook(payment_method: PaymentMethod, payload: dict):
+    """Dispatch a webhook payload to the matching provider."""
+    provider = get_provider(payment_method)
+    with get_db_session() as session:
+        result = provider.process_webhook(session, payload)
 
-    Args:
-        invoice_data: Invoice object from CryptoBot webhook
-    """
-    try:
-        invoice_id = invoice_data.get('invoice_id')
-        status = invoice_data.get('status')
-        paid_at = invoice_data.get('paid_at')
+    if not result.handled:
+        return False
 
-        print(f"📩 Webhook received: Invoice #{invoice_id}, status={status}, paid_at={paid_at}")
+    print("✅ Payment processed via webhook")
+    if result.notification:
+        print(f"   Transaction #{result.notification.transaction_id}")
+        print(f"   Amount: ${result.notification.amount:.2f}")
+        print(f"   Method: {result.notification.payment_method}")
 
-        if status != 'paid':
-            print(f"⚠️ Invoice {invoice_id} not in 'paid' status, ignoring")
-            return
-
-        # Find transaction by invoice_id in crypto_address field
-        # Format is: "invoice_id|pay_url"
-        with get_db_session() as session:
-            # Search for transaction with this invoice_id
-            transactions = session.query(Transaction).filter(
-                Transaction.payment_method.in_(['crypto_wallet']),
-                Transaction.status == TransactionStatus.PENDING
-            ).all()
-
-            transaction = None
-            for txn in transactions:
-                if txn.crypto_address and txn.crypto_address.startswith(f"{invoice_id}|"):
-                    transaction = txn
-                    break
-
-            if not transaction:
-                print(f"❌ No pending transaction found for invoice {invoice_id}")
-                return
-
-            # Get user
-            user = session.query(User).filter_by(id=transaction.user_id).first()
-
-            if not user:
-                print(f"❌ User not found for transaction {transaction.id}")
-                return
-
-            # Mark transaction as completed
-            transaction.status = TransactionStatus.COMPLETED
-            transaction.completed_at = datetime.utcnow()
-
-            # Add funds to user's wallet
-            user.wallet_balance += transaction.amount
-
-            # Session commits automatically on context manager exit
-            print(f"✅ Payment processed via webhook!")
-            print(f"   Transaction #{transaction.id}")
-            print(f"   User: @{user.username}")
-            print(f"   Amount: ${transaction.amount:.2f}")
-            print(f"   New balance: ${user.wallet_balance:.2f}")
-
-            # TODO: Send notification to user via bot
-            # This requires access to the bot instance
-            # For now, the user will see the updated balance when they check
-
-    except Exception as e:
-        print(f"❌ Error processing webhook: {e}")
-        import traceback
-        traceback.print_exc()
+    return True
 
 
 @app.route('/webhook/cryptobot', methods=['POST'])
@@ -157,8 +108,9 @@ def cryptobot_webhook():
             print(f"⚠️ Unknown update type: {update_type}")
             return jsonify({'ok': True}), 200
 
-        # Process the paid invoice
-        process_invoice_paid(payload)
+        handled = process_provider_webhook(PaymentMethod.CRYPTO_WALLET, payload)
+        if not handled:
+            print("⚠️ No pending transaction matched this CryptoBot webhook")
 
         return jsonify({'ok': True}), 200
 
@@ -174,7 +126,7 @@ def health_check():
     """Health check endpoint."""
     return jsonify({
         'status': 'ok',
-        'service': 'CryptoBot Webhook Receiver',
+        'service': 'Payment Webhook Receiver',
         'timestamp': datetime.utcnow().isoformat()
     }), 200
 
@@ -183,8 +135,8 @@ def health_check():
 def index():
     """Root endpoint with setup instructions."""
     return """
-    <h1>CryptoBot Webhook Receiver</h1>
-    <p>This server is running and ready to receive CryptoBot payment notifications.</p>
+    <h1>Payment Webhook Receiver</h1>
+    <p>This server is running and ready to receive payment provider notifications.</p>
 
     <h2>Setup Instructions:</h2>
     <ol>
@@ -207,7 +159,7 @@ def index():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("CryptoBot Webhook Server")
+    print("Payment Webhook Server")
     print("=" * 60)
     print(f"Server starting on http://0.0.0.0:5000")
     print(f"Webhook endpoint: /webhook/cryptobot")

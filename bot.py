@@ -54,8 +54,7 @@ def main():
         states={
             payment_handlers.AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_handlers.topup_amount)],
             payment_handlers.METHOD: [
-                CallbackQueryHandler(payment_handlers.payment_method_crypto, pattern="^pay_crypto$"),
-                CallbackQueryHandler(payment_handlers.payment_method_card, pattern="^pay_card$"),
+                CallbackQueryHandler(payment_handlers.payment_method_selected, pattern="^pay_"),
             ],
         },
         fallbacks=[

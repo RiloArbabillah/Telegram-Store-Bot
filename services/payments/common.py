@@ -1,0 +1,163 @@
+"""Shared helpers for normalized payment transactions."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+
+from database import PaymentMethod, TransactionStatus, User
+
+from .base import PaymentNotification
+
+
+PAYMENT_METHOD_LABELS = {
+    PaymentMethod.CRYPTO_WALLET: "CryptoBot",
+    PaymentMethod.CARD: "Card",
+    PaymentMethod.QRIS: "QRIS",
+}
+
+
+def payment_method_label(payment_method: PaymentMethod) -> str:
+    """Return a user-facing label for a payment method."""
+    return PAYMENT_METHOD_LABELS.get(payment_method, payment_method.value.replace("_", " ").title())
+
+
+def parse_provider_metadata(raw_metadata: str | None) -> dict:
+    """Parse provider metadata stored as JSON text."""
+    if not raw_metadata:
+        return {}
+
+    try:
+        parsed = json.loads(raw_metadata)
+    except (TypeError, ValueError):
+        return {}
+
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def dump_provider_metadata(metadata: dict | None) -> str | None:
+    """Serialize provider metadata to JSON text."""
+    if not metadata:
+        return None
+    return json.dumps(metadata, sort_keys=True)
+
+
+def extract_checkout_url(transaction) -> str | None:
+    """Return the canonical checkout URL for a transaction."""
+    if transaction.checkout_url:
+        return transaction.checkout_url
+
+    if transaction.crypto_address and "|" in transaction.crypto_address:
+        _, pay_url = transaction.crypto_address.split("|", 1)
+        return pay_url
+
+    if transaction.crypto_address and transaction.crypto_address.startswith("http"):
+        return transaction.crypto_address
+
+    return None
+
+
+def extract_external_reference(transaction) -> str | None:
+    """Return the canonical external reference for a transaction."""
+    if transaction.external_reference:
+        return transaction.external_reference
+
+    if transaction.crypto_address and "|" in transaction.crypto_address:
+        invoice_id, _ = transaction.crypto_address.split("|", 1)
+        return invoice_id
+
+    if transaction.crypto_address and transaction.crypto_address.startswith("tg_charge:"):
+        return transaction.crypto_address.split(":", 1)[1]
+
+    if transaction.crypto_address and not transaction.crypto_address.startswith("http"):
+        return transaction.crypto_address
+
+    return None
+
+
+def hydrate_legacy_transaction(transaction) -> None:
+    """Populate normalized transaction fields from legacy storage when needed."""
+    if not transaction.provider_name:
+        if transaction.payment_method == PaymentMethod.CRYPTO_WALLET:
+            transaction.provider_name = "cryptobot"
+        elif transaction.payment_method == PaymentMethod.CARD:
+            transaction.provider_name = "telegram_payments"
+        elif transaction.payment_method == PaymentMethod.QRIS:
+            transaction.provider_name = "qris"
+
+    if not transaction.external_reference:
+        transaction.external_reference = extract_external_reference(transaction)
+
+    if not transaction.checkout_url:
+        transaction.checkout_url = extract_checkout_url(transaction)
+
+
+def update_transaction_provider_fields(
+    transaction,
+    *,
+    provider_name: str | None = None,
+    external_reference: str | None = None,
+    checkout_url: str | None = None,
+    qr_payload: str | None = None,
+    provider_metadata: dict | None = None,
+    legacy_reference: str | None = None,
+) -> None:
+    """Update normalized provider fields and preserve legacy compatibility."""
+    if provider_name:
+        transaction.provider_name = provider_name
+    if external_reference:
+        transaction.external_reference = str(external_reference)
+    if checkout_url:
+        transaction.checkout_url = checkout_url
+    if qr_payload:
+        transaction.qr_payload = qr_payload
+    if provider_metadata is not None:
+        merged_metadata = parse_provider_metadata(transaction.provider_metadata)
+        merged_metadata.update(provider_metadata)
+        transaction.provider_metadata = dump_provider_metadata(merged_metadata)
+    if legacy_reference:
+        transaction.crypto_address = legacy_reference
+
+
+def complete_transaction(
+    session,
+    transaction,
+    *,
+    provider_name: str | None = None,
+    external_reference: str | None = None,
+    checkout_url: str | None = None,
+    qr_payload: str | None = None,
+    provider_metadata: dict | None = None,
+) -> PaymentNotification | None:
+    """Mark a transaction complete exactly once and credit the user wallet."""
+    hydrate_legacy_transaction(transaction)
+
+    if transaction.status == TransactionStatus.COMPLETED:
+        return None
+
+    update_transaction_provider_fields(
+        transaction,
+        provider_name=provider_name,
+        external_reference=external_reference,
+        checkout_url=checkout_url,
+        qr_payload=qr_payload,
+        provider_metadata=provider_metadata,
+    )
+
+    transaction.status = TransactionStatus.COMPLETED
+    transaction.completed_at = datetime.utcnow()
+
+    user = session.query(User).filter_by(id=transaction.user_id).first()
+    if not user:
+        return None
+
+    user.wallet_balance += transaction.amount
+
+    return PaymentNotification(
+        user_telegram_id=user.telegram_id,
+        amount=transaction.amount,
+        new_balance=user.wallet_balance,
+        transaction_id=transaction.id,
+        payment_method=payment_method_label(transaction.payment_method),
+        provider_name=transaction.provider_name,
+    )

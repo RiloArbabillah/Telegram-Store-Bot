@@ -325,10 +325,10 @@ Keep the `python bot.py` window open, or run it as a background/scheduled task (
   rm bot_database.db
   ```
 - **PostgreSQL (optional):** set `DATABASE_URL` to a Postgres URL, e.g.
-  `postgresql+psycopg2://user:password@localhost:5432/digitalstore`
-  (The `psycopg2-binary` driver is already in `requirements.txt`).
+  `postgresql+psycopg://user:password@localhost:5432/digitalstore`
+  (The `psycopg` driver is already in `requirements.txt`).
 - **Upgrading an older database:** if you’re migrating an existing SQLite DB created before category fields were made optional, run once:
-  `python migrations/001_make_category_id_nullable.py` (not needed for fresh installs).
+  `python migrations/categorynullable.py` (not needed for fresh installs).
 
 ---
 

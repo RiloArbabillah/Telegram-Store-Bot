@@ -1,6 +1,6 @@
 """Base types for payment provider integrations."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from database import PaymentMethod
@@ -18,6 +18,7 @@ class PaymentPage:
     button_text: str | None = None
     button_url: str | None = None
     invoice_request: dict[str, Any] | None = None
+    photo_file_id: str | None = None
 
 
 @dataclass

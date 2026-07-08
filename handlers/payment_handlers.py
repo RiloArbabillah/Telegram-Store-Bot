@@ -22,6 +22,7 @@ from services.payments import (
     list_payment_options,
     list_payment_providers,
 )
+from config.settings import settings as app_settings
 
 # Conversation states for top-up
 AMOUNT, METHOD = range(2)
@@ -88,6 +89,28 @@ def _payment_page_markup(payment_page):
     return None
 
 
+async def _send_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_page):
+    """Render a provider payment page, optionally with media."""
+    query = update.callback_query
+
+    if payment_page.photo_file_id:
+        await query.edit_message_text(
+            "✅ Payment instructions sent below. Complete the payment there and follow the next step in chat."
+        )
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=payment_page.photo_file_id,
+            caption=payment_page.message,
+            reply_markup=_payment_page_markup(payment_page),
+        )
+        return
+
+    await query.edit_message_text(
+        payment_page.message,
+        reply_markup=_payment_page_markup(payment_page),
+    )
+
+
 def _build_payment_notifications(notif):
     """Build user/admin confirmation messages for a completed payment."""
     user_message = f"""✅ Payment Confirmed!
@@ -132,7 +155,7 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
             return ConversationHandler.END
 
         try:
-            _, payment_page = provider.create_payment(session, user, usd_amount)
+            transaction, payment_page = provider.create_payment(session, user, usd_amount)
         except PaymentCreationError as exc:
             payment_options = [
                 (option.label, f"pay_{option.method.value}")
@@ -144,10 +167,12 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
             )
             return METHOD
 
-        await query.edit_message_text(
-            payment_page.message,
-            reply_markup=_payment_page_markup(payment_page),
-        )
+        if provider.method == PaymentMethod.QRIS:
+            context.user_data['pending_qris_transaction_id'] = transaction.id
+        else:
+            context.user_data.pop('pending_qris_transaction_id', None)
+
+        await _send_payment_page(update, context, payment_page)
 
         if payment_page.invoice_request:
             prices = [
@@ -166,6 +191,95 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
             )
 
     return ConversationHandler.END
+
+
+async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user-submitted proof for a pending manual QRIS payment."""
+    pending_transaction_id = context.user_data.get('pending_qris_transaction_id')
+
+    if not update.message or not (update.message.photo or update.message.document):
+        return
+
+    with get_db_session() as session:
+        transaction = None
+        if pending_transaction_id:
+            transaction = session.query(Transaction).filter_by(id=pending_transaction_id).first()
+
+        if not transaction:
+            user = session.query(User).filter_by(telegram_id=update.effective_user.id).first()
+            if not user:
+                return
+
+            transaction = session.query(Transaction).filter_by(
+                user_id=user.id,
+                payment_method=PaymentMethod.QRIS,
+                status=TransactionStatus.PENDING,
+            ).order_by(Transaction.created_at.desc()).first()
+
+        if not transaction:
+            context.user_data.pop('pending_qris_transaction_id', None)
+            return
+
+        if transaction.payment_method != PaymentMethod.QRIS or transaction.status != TransactionStatus.PENDING:
+            context.user_data.pop('pending_qris_transaction_id', None)
+            return
+
+        user = session.query(User).filter_by(id=transaction.user_id).first()
+        if not user or user.telegram_id != update.effective_user.id:
+            return
+
+        if update.message.photo:
+            proof_file_id = update.message.photo[-1].file_id
+            proof_file_type = 'photo'
+        else:
+            proof_file_id = update.message.document.file_id
+            proof_file_type = 'document'
+
+        transaction.proof_file_id = proof_file_id
+        transaction.proof_file_type = proof_file_type
+        transaction.proof_submitted_at = datetime.utcnow()
+        session.commit()
+
+        username = update.effective_user.username or f"ID:{update.effective_user.id}"
+        amount = transaction.amount
+        transaction_id = transaction.id
+
+    context.user_data.pop('pending_qris_transaction_id', None)
+
+    await update.message.reply_text(
+        "✅ Payment proof received. Admin will review it shortly.",
+        reply_markup=create_main_menu_keyboard()
+    )
+
+    admin_caption = (
+        f"📱 QRIS Proof Submitted\n\n"
+        f"🆔 Transaction: #{transaction_id}\n"
+        f"👤 User: @{username}\n"
+        f"💰 Amount: {format_price(amount)}\n\n"
+        f"Review the proof and choose an action:"
+    )
+    admin_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm Payment", callback_data=f"confirm_payment_{transaction_id}")],
+        [InlineKeyboardButton("❌ Reject Payment", callback_data=f"cancel_payment_{transaction_id}")],
+    ])
+
+    try:
+        if proof_file_type == 'photo':
+            await context.bot.send_photo(
+                chat_id=app_settings.ADMIN_TELEGRAM_ID,
+                photo=proof_file_id,
+                caption=admin_caption,
+                reply_markup=admin_keyboard,
+            )
+        else:
+            await context.bot.send_document(
+                chat_id=app_settings.ADMIN_TELEGRAM_ID,
+                document=proof_file_id,
+                caption=admin_caption,
+                reply_markup=admin_keyboard,
+            )
+    except Exception:
+        pass
 
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

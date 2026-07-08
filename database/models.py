@@ -195,6 +195,9 @@ class Transaction(Base):
     checkout_url = Column(String(500), nullable=True)
     qr_payload = Column(Text, nullable=True)
     provider_metadata = Column(Text, nullable=True)
+    proof_file_id = Column(String(255), nullable=True)
+    proof_file_type = Column(String(50), nullable=True)
+    proof_submitted_at = Column(DateTime, nullable=True)
     crypto_address = Column(String(500), nullable=True)
     status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -214,6 +217,8 @@ class Settings(Base):
     store_logo_path = Column(String(500), nullable=True)
     support_username = Column(String(255), nullable=True)
     channel_username = Column(String(255), nullable=True)
+    qris_instructions_text = Column(Text, nullable=True)
+    qris_image_file_id = Column(String(255), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

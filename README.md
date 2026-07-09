@@ -201,7 +201,7 @@ Fill in the variables:
 | `DATABASE_URL` | ➖ | Defaults to `sqlite:///bot_database.db`. Set a PostgreSQL URL to use Postgres. |
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
-| `PAYMENT_CURRENCY` | ➖ | Currency for card invoices (default `USD`). Must be USD-denominated to match wallet amounts. |
+| `PAYMENT_CURRENCY` | ➖ | Business currency for the whole app (default `IDR`). All wallet, product, order, and top-up amounts are treated as whole rupiah. |
 | `DANA_API_MODE` | ➖ | Set to `disabled` to use manual QRIS fallback, or any non-disabled value to enable DANA QRIS when required config is filled. |
 | `DANA_BASE_URL` | ➖ | DANA API base URL. Use `https://api.sandbox.dana.id` for sandbox and `https://api.saas.dana.id` for production. |
 | `DANA_PARTNER_ID` | ➖ | DANA partner/client ID. |

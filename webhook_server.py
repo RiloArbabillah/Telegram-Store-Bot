@@ -25,6 +25,7 @@ from config.settings import settings
 from services.payments import get_provider
 from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod
+from utils import format_price
 
 app = Flask(__name__)
 
@@ -66,7 +67,7 @@ def process_provider_webhook(payment_method: PaymentMethod, payload: dict):
     print("✅ Payment processed via webhook")
     if result.notification:
         print(f"   Transaction #{result.notification.transaction_id}")
-        print(f"   Amount: ${result.notification.amount:.2f}")
+        print(f"   Amount: {format_price(result.notification.amount)}")
         print(f"   Method: {result.notification.payment_method}")
 
     return True

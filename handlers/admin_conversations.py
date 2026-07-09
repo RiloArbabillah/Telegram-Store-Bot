@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database import (
     get_db_session, Category, Subcategory, Product, ProductType, Settings
 )
-from utils import is_admin, format_price, create_admin_product_menu_keyboard, create_admin_category_menu_keyboard
+from utils import is_admin, format_price, validate_amount, create_admin_product_menu_keyboard, create_admin_category_menu_keyboard
 from config.settings import settings as app_settings
 
 # Conversation states for product creation
@@ -81,7 +81,7 @@ async def product_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_product")]]
 
     await update.message.reply_text(
-        "💰 Please enter the product price (USD):",
+        "💰 Please enter the product price in IDR:\nExample: 10000",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return PRODUCT_PRICE
@@ -93,10 +93,10 @@ async def product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_product")]]
 
     try:
-        price = float(update.message.text)
-        if price <= 0:
+        is_valid, price, error_message = validate_amount(update.message.text)
+        if not is_valid:
             await update.message.reply_text(
-                "❌ Price must be greater than 0. Please enter a valid price:",
+                f"❌ {error_message}\n\nPlease enter a valid IDR price:",
                 reply_markup=InlineKeyboardMarkup(cancel_keyboard)
             )
             return PRODUCT_PRICE
@@ -117,7 +117,7 @@ async def product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except ValueError:
         await update.message.reply_text(
-            "❌ Invalid price. Please enter a number:",
+            "❌ Invalid price. Please enter a whole IDR amount:",
             reply_markup=InlineKeyboardMarkup(cancel_keyboard)
         )
         return PRODUCT_PRICE
@@ -1126,7 +1126,7 @@ async def edit_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             status_icon = "✅" if product.is_active else "❌"
             keyboard.append([
                 InlineKeyboardButton(
-                    f"{status_icon} {product.name} (${product.price})",
+                    f"{status_icon} {product.name} ({format_price(product.price)})",
                     callback_data=f"edit_prod_{product.id}"
                 )
             ])
@@ -1399,7 +1399,7 @@ async def edit_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif field == 'desc':
             prompt = f"📝 Current description:\n{product.description}\n\nEnter new product description:"
         elif field == 'price':
-            prompt = f"💰 Current price: {format_price(product.price)}\n\nEnter new product price (USD):"
+            prompt = f"💰 Current price: {format_price(product.price)}\n\nEnter new product price in IDR:"
 
     cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_edit")]]
     await query.edit_message_text(
@@ -1481,11 +1481,14 @@ async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             product.description = new_value
         elif field == 'price':
             try:
-                product.price = float(new_value)
+                is_valid, parsed_price, error_message = validate_amount(new_value)
+                if not is_valid:
+                    raise ValueError(error_message)
+                product.price = parsed_price
             except ValueError:
                 cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_edit")]]
                 await update.message.reply_text(
-                    "❌ Invalid price. Please enter a valid number:",
+                    "❌ Invalid price. Please enter a whole IDR amount:",
                     reply_markup=InlineKeyboardMarkup(cancel_keyboard)
                 )
                 return EDIT_NEW_VALUE

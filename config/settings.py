@@ -57,6 +57,20 @@ class Settings:
     PAYMENT_EXPIRY_HOURS = 0.5  # Payment order expiration time (30 minutes)
     PAYMENT_CHECK_INTERVAL = 30  # Seconds between payment verification checks
 
+    # DANA QRIS Settings
+    DANA_API_MODE = _get_env('DANA_API_MODE', 'disabled').lower()
+    DANA_BASE_URL = _get_env('DANA_BASE_URL', 'https://api.sandbox.dana.id')
+    DANA_PARTNER_ID = _get_env('DANA_PARTNER_ID')
+    DANA_CHANNEL_ID = _get_env('DANA_CHANNEL_ID', '1')
+    DANA_MERCHANT_ID = _get_env('DANA_MERCHANT_ID')
+    DANA_STORE_ID = _get_env('DANA_STORE_ID')
+    DANA_SUB_MERCHANT_ID = _get_env('DANA_SUB_MERCHANT_ID')
+    DANA_TERMINAL_ID = _get_env('DANA_TERMINAL_ID')
+    DANA_PRIVATE_KEY_PATH = _get_env('DANA_PRIVATE_KEY_PATH')
+    DANA_PUBLIC_KEY_PATH = _get_env('DANA_PUBLIC_KEY_PATH')
+    DANA_CALLBACK_URL = _get_env('DANA_CALLBACK_URL')
+    DANA_ENABLED = DANA_API_MODE not in {'', 'disabled', 'off', 'false', '0'}
+
     # Asset Storage
     ASSETS_DIR = 'assets'
     LOGOS_DIR = os.path.join(ASSETS_DIR, 'logos')
@@ -74,5 +88,25 @@ def validate_settings():
 
     if not settings.ADMIN_TELEGRAM_ID:
         raise ValueError("ADMIN_TELEGRAM_ID is required in .env file")
+
+    if settings.DANA_ENABLED:
+        missing = [
+            name
+            for name, value in {
+                'DANA_BASE_URL': settings.DANA_BASE_URL,
+                'DANA_PARTNER_ID': settings.DANA_PARTNER_ID,
+                'DANA_MERCHANT_ID': settings.DANA_MERCHANT_ID,
+                'DANA_STORE_ID': settings.DANA_STORE_ID,
+                'DANA_PRIVATE_KEY_PATH': settings.DANA_PRIVATE_KEY_PATH,
+                'DANA_PUBLIC_KEY_PATH': settings.DANA_PUBLIC_KEY_PATH,
+                'DANA_CALLBACK_URL': settings.DANA_CALLBACK_URL,
+            }.items()
+            if not value
+        ]
+
+        if missing:
+            raise ValueError(
+                "DANA_API_MODE is enabled but missing required config: " + ", ".join(missing)
+            )
 
     print("[OK] Configuration validated successfully")

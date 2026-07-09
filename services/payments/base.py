@@ -19,6 +19,8 @@ class PaymentPage:
     button_url: str | None = None
     invoice_request: dict[str, Any] | None = None
     photo_file_id: str | None = None
+    photo_bytes: bytes | None = None
+    photo_filename: str | None = None
 
 
 @dataclass

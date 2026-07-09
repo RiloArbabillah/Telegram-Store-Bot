@@ -104,6 +104,7 @@ class Product(Base):
     subcategory_id = Column(Integer, ForeignKey('subcategories.id'), nullable=True)
     image_path = Column(String(500), nullable=True)
     download_link = Column(String(500), nullable=True)  # For file-type products
+    supporting_files = Column(Text, nullable=True)  # JSON list of Telegram files for AKUN products
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -225,6 +226,7 @@ class Settings(Base):
     channel_username = Column(String(255), nullable=True)
     qris_instructions_text = Column(Text, nullable=True)
     qris_image_file_id = Column(String(255), nullable=True)
+    qris_static_payload = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

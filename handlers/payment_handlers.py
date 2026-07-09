@@ -36,7 +36,7 @@ async def topup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    message = "💬 Please reply the amount USD you want to fund your wallet.\nExample: 100"
+    message = "💬 Please reply the amount IDR you want to fund your wallet.\nExample: 10000"
 
     await query.edit_message_text(
         message,
@@ -66,9 +66,17 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_options = [
         (option.label, f"pay_{option.method.value}")
         for option in list_payment_options()
+        if option.enabled
     ]
 
-    message = f"💰 Amount: ${amount:.2f}\n\n💬 Please choose a payment method:"
+    if not payment_options:
+        await update.message.reply_text(
+            "❌ No payment methods are currently available. Please contact support.",
+            reply_markup=create_cancel_keyboard()
+        )
+        return ConversationHandler.END
+
+    message = f"💰 Amount: {format_price(amount)}\n\n💬 Please choose a payment method:"
 
     await update.message.reply_text(
         message,
@@ -141,10 +149,10 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text("❌ Unknown payment method. Please start again.")
         return ConversationHandler.END
 
-    usd_amount = context.user_data.get('topup_amount', 0)
+    topup_amount = context.user_data.get('topup_amount', 0)
     user_id = update.effective_user.id
 
-    if usd_amount <= 0:
+    if topup_amount <= 0:
         await query.edit_message_text("❌ Invalid amount. Please start the top-up again.")
         return ConversationHandler.END
 
@@ -155,11 +163,12 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
             return ConversationHandler.END
 
         try:
-            transaction, payment_page = provider.create_payment(session, user, usd_amount)
+            transaction, payment_page = provider.create_payment(session, user, topup_amount)
         except PaymentCreationError as exc:
             payment_options = [
                 (option.label, f"pay_{option.method.value}")
                 for option in list_payment_options()
+                if option.enabled
             ]
             await query.edit_message_text(
                 str(exc),

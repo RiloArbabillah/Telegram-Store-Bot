@@ -16,12 +16,12 @@ class TelegramCardProvider(PaymentProvider):
     button_label = "💳 Card"
 
     def is_available(self) -> bool:
-        return bool(app_settings.TELEGRAM_PROVIDER_TOKEN)
+        return bool(app_settings.TELEGRAM_PROVIDER_TOKEN) and app_settings.PAYMENT_CURRENCY == "USD"
 
     def create_payment(self, session, user, amount: float):
         if not self.is_available():
             raise PaymentCreationError(
-                "❌ Card payments are not configured yet.\n\nPlease choose another payment method or contact support."
+                "❌ Card payments are disabled for the current IDR wallet setup.\n\nPlease choose QRIS instead."
             )
 
         transaction = Transaction(

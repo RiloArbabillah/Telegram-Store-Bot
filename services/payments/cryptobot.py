@@ -18,7 +18,15 @@ class CryptoBotProvider(PaymentProvider):
     provider_name = "cryptobot"
     button_label = "🪙 CryptoBot"
 
+    def is_available(self) -> bool:
+        return bool(app_settings.CRYPTO_BOT_API_KEY) and app_settings.PAYMENT_CURRENCY == "USD"
+
     def create_payment(self, session, user, amount: float):
+        if not self.is_available():
+            raise PaymentCreationError(
+                "❌ CryptoBot top-up is disabled for the current IDR wallet setup.\n\nPlease choose QRIS instead."
+            )
+
         existing_pending = session.query(Transaction).filter_by(
             user_id=user.id,
             payment_method=self.method,
@@ -135,7 +143,7 @@ Click the button below to open the payment page. You can pay with ANY cryptocurr
 ✅ TRX (Tron)
 And many more!
 
-The system will automatically verify and add ${transaction.amount:.2f} to your balance as soon as your payment is confirmed.
+The system will automatically verify and add {format_price(transaction.amount)} to your balance as soon as your payment is confirmed.
 
 ⏰ Expires: {expiry_text}"""
 

@@ -179,6 +179,7 @@ def parse_supporting_files(raw_value: str | None) -> list[dict]:
                 "file_id": str(item["file_id"]),
                 "file_name": str(item.get("file_name") or "file"),
                 "mime_type": str(item.get("mime_type") or ""),
+                "file_type": str(item.get("file_type") or ""),
             })
 
     return files
@@ -195,6 +196,7 @@ def dump_supporting_files(files: list[dict] | None) -> str | None:
             "file_id": str(file_id),
             "file_name": str(item.get("file_name") or "file"),
             "mime_type": str(item.get("mime_type") or ""),
+            "file_type": str(item.get("file_type") or ""),
         })
 
     if not normalized:

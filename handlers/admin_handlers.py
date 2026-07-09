@@ -853,12 +853,14 @@ async def handle_restock_akun_supporting_file(update: Update, context: ContextTy
             "file_id": document.file_id,
             "file_name": document.file_name or "file",
             "mime_type": document.mime_type or "",
+            "file_type": "document",
         })
     else:
         files.append({
             "file_id": photo.file_id,
             "file_name": "photo",
             "mime_type": "image/jpeg",
+            "file_type": "photo",
         })
 
     await update.message.reply_text(

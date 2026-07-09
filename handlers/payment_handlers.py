@@ -33,6 +33,35 @@ AMOUNT, METHOD = range(2)
 PURCHASE_QUANTITY = 10
 
 
+def _is_photo_supporting_file(file_info: dict) -> bool:
+    file_type = str(file_info.get("file_type") or "").lower()
+    mime_type = str(file_info.get("mime_type") or "").lower()
+    file_name = str(file_info.get("file_name") or "").lower()
+    return file_type == "photo" or mime_type.startswith("image/") or file_name == "photo"
+
+
+async def send_supporting_file(bot, chat_id: int, file_info: dict) -> bool:
+    """Send a supporting file using the Telegram method matching its media type."""
+    caption = file_info.get("caption") or file_info.get("file_name") or "Supporting file"
+    try:
+        if _is_photo_supporting_file(file_info):
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=file_info["file_id"],
+                caption=caption,
+            )
+        else:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=file_info["file_id"],
+                caption=caption,
+            )
+        return True
+    except Exception as exc:
+        print(f"❌ Failed to send supporting file {file_info.get('file_name', 'file')}: {exc}")
+        return False
+
+
 async def topup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the wallet top-up flow."""
     query = update.callback_query
@@ -809,14 +838,7 @@ Thank you for your purchase!"""
         await query.edit_message_text(user_message, reply_markup=reply_markup)
 
         for file_info in supporting_files_to_send:
-            try:
-                await context.bot.send_document(
-                    chat_id=telegram_id,
-                    document=file_info["file_id"],
-                    caption=file_info.get("caption") or f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}"
-                )
-            except Exception:
-                pass
+            await send_supporting_file(context.bot, telegram_id, file_info)
 
         # Notify admin
         admin_message = f"""🛍 New Order Received

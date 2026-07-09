@@ -12,6 +12,7 @@ from utils import (
     create_back_support_keyboard, parse_supporting_files
 )
 from config.settings import settings as app_settings
+from handlers.payment_handlers import send_supporting_file
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -632,14 +633,7 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text(message, reply_markup=reply_markup)
 
     for file_info in files_to_send:
-        try:
-            await context.bot.send_document(
-                chat_id=user_id,
-                document=file_info["file_id"],
-                caption=file_info.get("caption") or file_info.get("file_name", "Supporting file"),
-            )
-        except Exception:
-            pass
+        await send_supporting_file(context.bot, user_id, file_info)
 
 
 async def back_to_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

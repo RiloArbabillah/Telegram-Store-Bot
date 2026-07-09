@@ -539,13 +539,6 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
             if item.product.product_type == ProductType.AKUN:
                 item_files = []
 
-                shared_files = parse_supporting_files(item.product.supporting_files)
-                for file_info in shared_files:
-                    item_files.append({
-                        **file_info,
-                        "caption": f"📎 {item.product.name} - {file_info.get('file_name', 'Supporting file')}",
-                    })
-
                 assigned_keys = (
                     session.query(ProductKey)
                     .filter_by(order_id=order.id, product_id=item.product_id)

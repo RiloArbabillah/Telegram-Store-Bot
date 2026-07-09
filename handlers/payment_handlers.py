@@ -763,12 +763,6 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
             order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
             if product.product_type == ProductType.AKUN:
-                shared_files = parse_supporting_files(product.supporting_files)
-                if shared_files:
-                    supporting_files_to_send.extend({
-                        **file_info,
-                        "caption": f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}",
-                    } for file_info in shared_files)
                 for index, item in enumerate(items, start=1):
                     for file_info in item["supporting_files"]:
                         supporting_files_to_send.append({
@@ -865,7 +859,7 @@ def assign_product_keys(session, product_id: int, quantity: int, order_id: int) 
     available_keys = session.query(ProductKey).filter_by(
         product_id=product_id,
         is_sold=False
-    ).limit(quantity).with_for_update().all()
+    ).order_by(ProductKey.id.asc()).limit(quantity).with_for_update().all()
 
     if len(available_keys) < quantity:
         raise ValueError(f"Not enough keys available. Requested: {quantity}, Available: {len(available_keys)}")

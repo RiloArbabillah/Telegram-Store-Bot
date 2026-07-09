@@ -13,6 +13,7 @@ class ProductType(enum.Enum):
     """Enum for product types."""
     KEY = "key"
     FILE = "file"
+    AKUN = "akun"
 
 
 class OrderStatus(enum.Enum):

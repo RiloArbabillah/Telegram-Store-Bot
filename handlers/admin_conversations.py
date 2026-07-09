@@ -467,7 +467,7 @@ async def create_product_final(update, context):
 Product ID: #{product.id}"""
 
         if keys_added > 0:
-            label = "Accounts" if context.user_data['product_type'] == ProductType.AKUN else "Keys"
+            label = "Akun" if context.user_data['product_type'] == ProductType.AKUN else "Keys"
             message += f"\n🔐 {label} Added: {keys_added}"
         elif context.user_data['product_type'] in {ProductType.KEY, ProductType.AKUN}:
             message += "\n\n⚠️ No keys added. Use the Restock Keys option to add inventory."
@@ -1216,7 +1216,7 @@ async def edit_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE
         from database import ProductKey
         available_keys = session.query(ProductKey).filter_by(product_id=product.id, is_sold=False).count()
 
-        inventory_label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
+        inventory_label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
 
         # Show fields to edit
         keyboard = [

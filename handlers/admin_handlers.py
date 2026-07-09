@@ -705,7 +705,7 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
 
         # Create keyboard with options
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        restock_label = "accounts" if product.product_type == ProductType.AKUN else "keys"
+        restock_label = "akun" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
             [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
             [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
@@ -769,7 +769,7 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
 
         # Create keyboard with options
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        restock_label = "accounts" if product.product_type == ProductType.AKUN else "keys"
+        restock_label = "akun" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
             [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
             [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
@@ -1096,7 +1096,7 @@ async def admin_order_detail_callback(update: Update, context: ContextTypes.DEFA
             # Add delivered assets (keys or download links)
             if item.delivered_asset:
                 if product and product.product_type in {ProductType.KEY, ProductType.AKUN}:
-                    label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
+                    label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
                     message += f"  🔐 {label}:\n{item.delivered_asset}\n"
                 elif product and product.product_type == ProductType.FILE:
                     message += f"  🔗 Download: {item.delivered_asset}\n"

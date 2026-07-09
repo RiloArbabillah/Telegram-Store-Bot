@@ -702,7 +702,7 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Atomically assign keys/accounts from product_keys table
             items = assign_product_keys(session, product.id, quantity, order.id)
             order_item.delivered_asset = "\n".join(items)
-            label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
+            label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
             order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
 
         elif product.product_type == ProductType.FILE:

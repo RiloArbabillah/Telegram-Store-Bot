@@ -464,6 +464,27 @@ def main():
     application.add_handler(CallbackQueryHandler(user_handlers.support_callback, pattern="^support$"))
     application.add_handler(CallbackQueryHandler(user_handlers.order_history_callback, pattern="^order_history"))
     application.add_handler(CallbackQueryHandler(user_handlers.user_order_detail_callback, pattern="^user_order_detail_"))
+
+    # Restock conversation must be registered before generic document/photo handlers.
+    restock_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_handlers.admin_select_product_restock_callback, pattern="^select_product_")],
+        states={
+            admin_handlers.WAITING_FOR_KEYS: [
+                MessageHandler(filters.Document.ALL & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_paste),
+            ],
+            admin_handlers.WAITING_FOR_AKUN_FILES: [
+                MessageHandler((filters.Document.ALL | filters.PHOTO) & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_supporting_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_files_done),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(admin_handlers.cancel_restock, pattern="^cancel_restock$"),
+            CommandHandler("cancel", admin_handlers.cancel_restock, filters=filters.User(settings.ADMIN_TELEGRAM_ID)),
+        ],
+    )
+    application.add_handler(restock_conv)
+
     application.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, payment_handlers.qris_proof_submission))
 
     # Purchase confirmation and cancellation handlers
@@ -498,26 +519,6 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_orders_callback, pattern="^admin_orders"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_settings_callback, pattern="^admin_settings"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_broadcast_callback, pattern="^admin_broadcast"))
-
-    # Restock keys conversation handler
-    restock_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_handlers.admin_select_product_restock_callback, pattern="^select_product_")],
-        states={
-            admin_handlers.WAITING_FOR_KEYS: [
-                MessageHandler(filters.Document.ALL & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_paste),
-            ],
-            admin_handlers.WAITING_FOR_AKUN_FILES: [
-                MessageHandler(filters.Document.ALL & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_supporting_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_files_done),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(admin_handlers.cancel_restock, pattern="^cancel_restock$"),
-            CommandHandler("cancel", admin_handlers.cancel_restock, filters=filters.User(settings.ADMIN_TELEGRAM_ID)),
-        ],
-    )
-    application.add_handler(restock_conv)
 
     # Schedule background jobs
     job_queue = application.job_queue

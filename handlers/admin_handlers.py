@@ -842,16 +842,24 @@ async def handle_restock_akun_supporting_file(update: Update, context: ContextTy
         return ConversationHandler.END
 
     document = update.message.document if update.message else None
-    if not document:
-        await update.message.reply_text("❌ Please upload a document, type `done`, or type `skip`.")
+    photo = update.message.photo[-1] if update.message and update.message.photo else None
+    if not document and not photo:
+        await update.message.reply_text("❌ Please upload a document/photo, type `done`, or type `skip`.")
         return WAITING_FOR_AKUN_FILES
 
     files = context.user_data.setdefault('restock_akun_files', [])
-    files.append({
-        "file_id": document.file_id,
-        "file_name": document.file_name or "file",
-        "mime_type": document.mime_type or "",
-    })
+    if document:
+        files.append({
+            "file_id": document.file_id,
+            "file_name": document.file_name or "file",
+            "mime_type": document.mime_type or "",
+        })
+    else:
+        files.append({
+            "file_id": photo.file_id,
+            "file_name": "photo",
+            "mime_type": "image/jpeg",
+        })
 
     await update.message.reply_text(
         f"✅ File added ({len(files)} total). Upload another file, type `done` to save, or type `skip` to save without files."

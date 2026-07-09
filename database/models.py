@@ -199,6 +199,7 @@ class Transaction(Base):
     proof_file_id = Column(String(255), nullable=True)
     proof_file_type = Column(String(50), nullable=True)
     proof_submitted_at = Column(DateTime, nullable=True)
+    confirmed_amount = Column(Integer, nullable=True)
     provider_status_code = Column(String(50), nullable=True)
     provider_status_text = Column(String(255), nullable=True)
     provider_paid_at = Column(DateTime, nullable=True)

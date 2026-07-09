@@ -123,6 +123,7 @@ def complete_transaction(
     session,
     transaction,
     *,
+    credited_amount: int | None = None,
     provider_name: str | None = None,
     external_reference: str | None = None,
     checkout_url: str | None = None,
@@ -144,6 +145,12 @@ def complete_transaction(
         provider_metadata=provider_metadata,
     )
 
+    effective_amount = credited_amount if credited_amount is not None else transaction.confirmed_amount
+    if effective_amount is None:
+        effective_amount = transaction.amount
+    effective_amount = int(effective_amount)
+    transaction.confirmed_amount = effective_amount
+
     transaction.status = TransactionStatus.COMPLETED
     transaction.completed_at = datetime.utcnow()
 
@@ -151,11 +158,11 @@ def complete_transaction(
     if not user:
         return None
 
-    user.wallet_balance += transaction.amount
+    user.wallet_balance += effective_amount
 
     return PaymentNotification(
         user_telegram_id=user.telegram_id,
-        amount=transaction.amount,
+        amount=effective_amount,
         new_balance=user.wallet_balance,
         transaction_id=transaction.id,
         payment_method=payment_method_label(transaction.payment_method),

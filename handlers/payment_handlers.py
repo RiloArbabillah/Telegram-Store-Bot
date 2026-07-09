@@ -758,11 +758,23 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=create_main_menu_keyboard()
                 )
                 return
-            order_item.delivered_asset = "\n".join(items)
+            delivered_values = [item["key_value"] for item in items]
+            order_item.delivered_asset = "\n".join(delivered_values)
             label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
             order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
             if product.product_type == ProductType.AKUN:
-                supporting_files_to_send = parse_supporting_files(product.supporting_files)
+                shared_files = parse_supporting_files(product.supporting_files)
+                if shared_files:
+                    supporting_files_to_send.extend({
+                        **file_info,
+                        "caption": f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}",
+                    } for file_info in shared_files)
+                for index, item in enumerate(items, start=1):
+                    for file_info in item["supporting_files"]:
+                        supporting_files_to_send.append({
+                            **file_info,
+                            "caption": f"📎 {product.name} - Akun #{index} - {file_info.get('file_name', 'Supporting file')}",
+                        })
                 if supporting_files_to_send:
                     order_details += f"📎 Supporting files: {len(supporting_files_to_send)} file(s) will be sent after this message.\n"
 
@@ -807,7 +819,7 @@ Thank you for your purchase!"""
                 await context.bot.send_document(
                     chat_id=telegram_id,
                     document=file_info["file_id"],
-                    caption=f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}"
+                    caption=file_info.get("caption") or f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}"
                 )
             except Exception:
                 pass
@@ -863,9 +875,10 @@ def assign_product_keys(session, product_id: int, quantity: int, order_id: int) 
         key.is_sold = True
         key.order_id = order_id
         key.sold_at = datetime.utcnow()
-        assigned_keys.append(key.key_value)
-
-    session.commit()
+        assigned_keys.append({
+            "key_value": key.key_value,
+            "supporting_files": parse_supporting_files(key.supporting_files),
+        })
 
     return assigned_keys
 

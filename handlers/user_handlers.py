@@ -359,7 +359,7 @@ async def product_detail_callback(update: Update, context: ContextTypes.DEFAULT_
             back_callback = "back_to_products"
 
         # Format product details
-        details = format_product_display(product, include_description=True)
+        details = format_product_display(product, include_description=True, session=session)
 
         # Send product image if available
         if product.image_path and os.path.exists(product.image_path):

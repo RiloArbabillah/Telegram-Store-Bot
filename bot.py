@@ -507,6 +507,10 @@ def main():
                 MessageHandler(filters.Document.ALL & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_keys_paste),
             ],
+            admin_handlers.WAITING_FOR_AKUN_FILES: [
+                MessageHandler(filters.Document.ALL & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_supporting_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_handlers.handle_restock_akun_files_done),
+            ],
         },
         fallbacks=[
             CallbackQueryHandler(admin_handlers.cancel_restock, pattern="^cancel_restock$"),

@@ -14,7 +14,8 @@ from utils import (
     create_admin_main_menu_keyboard, create_admin_product_menu_keyboard,
     create_admin_category_menu_keyboard, create_admin_user_menu_keyboard,
     create_admin_order_menu_keyboard, create_admin_settings_menu_keyboard,
-    create_admin_broadcast_menu_keyboard, parse_keys_from_text, clear_ban_cache
+    create_admin_broadcast_menu_keyboard, parse_keys_from_text, clear_ban_cache,
+    dump_supporting_files,
 )
 from utils.helpers import get_effective_product_stock
 from config.settings import settings as app_settings
@@ -24,6 +25,7 @@ from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
 WAITING_FOR_KEYS = 1
+WAITING_FOR_AKUN_FILES = 2
 
 
 def _admin_payment_label(transaction):
@@ -140,25 +142,26 @@ async def admin_select_product_restock_callback(update: Update, context: Context
             return
 
         is_akun = product.product_type == ProductType.AKUN
-        prompt_label = "account credentials" if is_akun else "keys"
-        example_lines = (
-            "email1@example.com----password1\n"
-            "email2@example.com----password2"
-        ) if is_akun else (
-            "KEY1-XXXX-XXXX-XXXX\n"
-            "KEY2-XXXX-XXXX-XXXX"
-        )
-
         effective = get_effective_product_stock(product, session=session)
-        message = f"""🔄 Restocking: {product.name}
+        if is_akun:
+            message = f"""🔄 Restocking: {product.name}
 Current Stock: {effective}
 
-📤 Upload a .txt file with {prompt_label} (one per line)
-OR
-✍️ Paste {prompt_label} directly (one per line)
+✍️ Send 1 account credential for this stock item.
 
 Example:
-{example_lines}"""
+email@example.com----password"""
+        else:
+            message = f"""🔄 Restocking: {product.name}
+Current Stock: {effective}
+
+📤 Upload a .txt file with keys (one per line)
+OR
+✍️ Paste keys directly (one per line)
+
+Example:
+KEY1-XXXX-XXXX-XXXX
+KEY2-XXXX-XXXX-XXXX"""
 
         # Create keyboard with cancel button
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -673,6 +676,26 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Please upload a text file. Try again or /cancel")
         return WAITING_FOR_KEYS
 
+    # Get product ID from context (should be set earlier)
+    product_id = context.user_data.get('restock_product_id')
+
+    if not product_id:
+        await update.message.reply_text("❌ Error: Product not selected. Please start over.")
+        return ConversationHandler.END
+
+    with get_db_session() as session:
+        product = session.query(Product).filter_by(id=product_id).first()
+
+        if not product:
+            await update.message.reply_text("❌ Product not found.")
+            return
+
+        if product.product_type == ProductType.AKUN:
+            await update.message.reply_text(
+                "❌ Please send the account credential as text first. Files can be uploaded after that."
+            )
+            return WAITING_FOR_KEYS
+
     # Download file
     file = await context.bot.get_file(document.file_id)
     file_content = await file.download_as_bytearray()
@@ -684,13 +707,6 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
     if not keys:
         await update.message.reply_text("❌ No valid entries found in file. Try again or /cancel")
         return WAITING_FOR_KEYS
-
-    # Get product ID from context (should be set earlier)
-    product_id = context.user_data.get('restock_product_id')
-
-    if not product_id:
-        await update.message.reply_text("❌ Error: Product not selected. Please start over.")
-        return ConversationHandler.END
 
     # Add keys to product_keys table
     with get_db_session() as session:
@@ -716,7 +732,6 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
         session.commit()
 
         # Create keyboard with options
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         restock_label = "akun" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
             [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
@@ -765,6 +780,25 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("❌ Product not found.")
             return
 
+        if product.product_type == ProductType.AKUN:
+            if len(keys) != 1:
+                await update.message.reply_text(
+                    "❌ Restock AKUN only accepts 1 account per session. Please send exactly 1 credential line."
+                )
+                return WAITING_FOR_KEYS
+
+            context.user_data['restock_akun_credential'] = keys[0]
+            context.user_data['restock_akun_files'] = []
+            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_restock")]]
+            await update.message.reply_text(
+                "📎 Upload optional file(s) for this account.\n\n"
+                "Send one or more documents, then type `done` to save.\n"
+                "Type `skip` to save this account without files.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown",
+            )
+            return WAITING_FOR_AKUN_FILES
+
         # Insert keys into product_keys table
         added_count = 0
         for key_value in keys:
@@ -781,7 +815,6 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
         session.commit()
 
         # Create keyboard with options
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         restock_label = "akun" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
             [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
@@ -800,6 +833,88 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
         context.user_data.pop('restock_product_id', None)
 
         return ConversationHandler.END
+
+
+async def handle_restock_akun_supporting_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect optional supporting files for one AKUN stock item."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    document = update.message.document if update.message else None
+    if not document:
+        await update.message.reply_text("❌ Please upload a document, type `done`, or type `skip`.")
+        return WAITING_FOR_AKUN_FILES
+
+    files = context.user_data.setdefault('restock_akun_files', [])
+    files.append({
+        "file_id": document.file_id,
+        "file_name": document.file_name or "file",
+        "mime_type": document.mime_type or "",
+    })
+
+    await update.message.reply_text(
+        f"✅ File added ({len(files)} total). Upload another file, type `done` to save, or type `skip` to save without files."
+    )
+    return WAITING_FOR_AKUN_FILES
+
+
+async def handle_restock_akun_files_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finish one AKUN restock item after optional file uploads."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    text = (update.message.text or "").strip().lower()
+    if text not in {"done", "skip"}:
+        await update.message.reply_text("❌ Type `done` to save, `skip` to save without files, or upload a document.")
+        return WAITING_FOR_AKUN_FILES
+
+    product_id = context.user_data.get('restock_product_id')
+    credential = context.user_data.get('restock_akun_credential')
+    if not product_id or not credential:
+        await update.message.reply_text("❌ Error: Restock session expired. Please start over.")
+        return ConversationHandler.END
+
+    files = [] if text == "skip" else context.user_data.get('restock_akun_files', [])
+
+    with get_db_session() as session:
+        product = session.query(Product).filter_by(id=product_id).first()
+        if not product:
+            await update.message.reply_text("❌ Product not found.")
+            return ConversationHandler.END
+
+        if product.product_type != ProductType.AKUN:
+            await update.message.reply_text("❌ This file flow is only available for AKUN products.")
+            return ConversationHandler.END
+
+        product_key = ProductKey(
+            product_id=product.id,
+            key_value=credential,
+            supporting_files=dump_supporting_files(files),
+            is_sold=False,
+        )
+        session.add(product_key)
+        product.stock_count += 1
+        session.commit()
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Restock More Akun", callback_data="admin_restock_keys")],
+            [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
+        ]
+        effective = get_effective_product_stock(product, session=session)
+        await update.message.reply_text(
+            f"✅ Successfully added 1 akun to {product.name}!\n"
+            f"📎 Files attached: {len(files)}\n"
+            f"New stock count: {effective}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    context.user_data.pop('restock_product_id', None)
+    context.user_data.pop('restock_akun_credential', None)
+    context.user_data.pop('restock_akun_files', None)
+
+    return ConversationHandler.END
 
 
 async def handle_welcome_message_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1425,7 +1540,9 @@ async def cancel_restock(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=create_admin_product_menu_keyboard()
         )
 
-    # Clear restock_product_id from context
+    # Clear restock context
     context.user_data.pop('restock_product_id', None)
+    context.user_data.pop('restock_akun_credential', None)
+    context.user_data.pop('restock_akun_files', None)
 
     return ConversationHandler.END

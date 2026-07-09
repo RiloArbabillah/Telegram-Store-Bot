@@ -99,19 +99,19 @@ def get_effective_product_stock(product, session=None) -> int:
     if product.product_type != ProductType.AKUN:
         return int(product.stock_count or 0)
 
-    owns_session = session is None
-    if owns_session:
-        session = get_db_session()
+    if session is None:
+        with get_db_session() as owned_session:
+            return int(
+                owned_session.query(ProductKey)
+                .filter_by(product_id=product.id, is_sold=False)
+                .count()
+            )
 
-    try:
-        return int(
-            session.query(ProductKey)
-            .filter_by(product_id=product.id, is_sold=False)
-            .count()
-        )
-    finally:
-        if owns_session:
-            session.close()
+    return int(
+        session.query(ProductKey)
+        .filter_by(product_id=product.id, is_sold=False)
+        .count()
+    )
 
 
 def format_product_display(product, include_description=False, session=None) -> str:

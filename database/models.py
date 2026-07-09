@@ -123,6 +123,7 @@ class ProductKey(Base):
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
     key_value = Column(Text, nullable=False)
+    supporting_files = Column(Text, nullable=True)  # JSON list of Telegram files for this AKUN item
     is_sold = Column(Boolean, default=False, index=True)
     order_id = Column(Integer, ForeignKey('orders.id'), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

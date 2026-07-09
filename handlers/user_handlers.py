@@ -3,13 +3,13 @@
 import os
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database import get_db_session, User, Category, Subcategory, Product, Order, OrderItem, Settings, ProductType, OrderStatus, DisputeStatus
+from database import get_db_session, User, Category, Subcategory, Product, ProductKey, Order, OrderItem, Settings, ProductType, OrderStatus, DisputeStatus
 from utils import (
     get_or_create_user, format_price, format_datetime, create_main_menu_keyboard,
     create_pagination_keyboard, create_product_detail_keyboard,
     create_support_keyboard, check_user_banned,
     paginate_items, format_product_display, build_availability_text,
-    create_back_support_keyboard
+    create_back_support_keyboard, parse_supporting_files
 )
 from config.settings import settings as app_settings
 
@@ -524,6 +524,7 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
 
         # Build order details message
         items_text = ""
+        files_to_send = []
         for item in order_items:
             items_text += f"  📦 {item.product.name} (x{item.quantity}) - {format_price(item.price * item.quantity)}\n"
 
@@ -534,6 +535,34 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
                     items_text += f"  🔐 {label}:\n{item.delivered_asset}\n"
                 elif item.product.product_type == ProductType.FILE:
                     items_text += f"  🔗 Download: {item.delivered_asset}\n"
+
+            if item.product.product_type == ProductType.AKUN:
+                item_files = []
+
+                shared_files = parse_supporting_files(item.product.supporting_files)
+                for file_info in shared_files:
+                    item_files.append({
+                        **file_info,
+                        "caption": f"📎 {item.product.name} - {file_info.get('file_name', 'Supporting file')}",
+                    })
+
+                assigned_keys = (
+                    session.query(ProductKey)
+                    .filter_by(order_id=order.id, product_id=item.product_id)
+                    .order_by(ProductKey.id.asc())
+                    .all()
+                )
+                for index, assigned_key in enumerate(assigned_keys, start=1):
+                    for file_info in parse_supporting_files(assigned_key.supporting_files):
+                        item_files.append({
+                            **file_info,
+                            "caption": f"📎 {item.product.name} - Akun #{index} - {file_info.get('file_name', 'Supporting file')}",
+                        })
+
+                if item_files:
+                    items_text += f"  📎 Files: {len(item_files)} file(s) will be sent after this message.\n"
+                    files_to_send.extend(item_files)
+
             items_text += "\n"
 
         status_emoji = {
@@ -571,6 +600,16 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(message, reply_markup=reply_markup)
+
+    for file_info in files_to_send:
+        try:
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=file_info["file_id"],
+                caption=file_info.get("caption") or file_info.get("file_name", "Supporting file"),
+            )
+        except Exception:
+            pass
 
 
 async def back_to_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

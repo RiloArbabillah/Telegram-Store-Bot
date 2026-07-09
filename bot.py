@@ -456,6 +456,8 @@ def main():
     application.add_handler(CallbackQueryHandler(user_handlers.main_menu_callback, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(user_handlers.main_menu_callback, pattern="^back$"))  # Back button goes to main menu
     application.add_handler(CallbackQueryHandler(user_handlers.back_to_products_callback, pattern="^back_to_products$"))
+    application.add_handler(CallbackQueryHandler(user_handlers.category_products_page_callback, pattern="^category_products_page_"))
+    application.add_handler(CallbackQueryHandler(user_handlers.subcategory_products_page_callback, pattern="^subcategory_products_page_"))
     application.add_handler(CallbackQueryHandler(user_handlers.products_callback, pattern="^products"))
     application.add_handler(CallbackQueryHandler(user_handlers.category_callback, pattern="^category_"))
     application.add_handler(CallbackQueryHandler(user_handlers.subcategory_callback, pattern="^subcategory_"))

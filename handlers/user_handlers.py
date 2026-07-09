@@ -190,6 +190,21 @@ async def subcategory_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await show_products_list(query, subcategory_id=subcategory_id, context=context)
 
 
+async def subcategory_products_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination for products inside a selected subcategory."""
+    query = update.callback_query
+    await query.answer()
+
+    if check_user_banned(update.effective_user.id):
+        await query.edit_message_text("⛔ You have been banned from using this bot.")
+        return
+
+    parts = query.data.split("_")
+    subcategory_id = int(parts[3])
+    page = int(parts[4])
+    await show_products_list(query, subcategory_id=subcategory_id, page=page, context=context)
+
+
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle category selection - show subcategories or products."""
     query = update.callback_query
@@ -250,6 +265,21 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_products_list(query, category_id=category_id, context=context)
 
 
+async def category_products_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination for products inside a selected category."""
+    query = update.callback_query
+    await query.answer()
+
+    if check_user_banned(update.effective_user.id):
+        await query.edit_message_text("⛔ You have been banned from using this bot.")
+        return
+
+    parts = query.data.split("_")
+    category_id = int(parts[3])
+    page = int(parts[4])
+    await show_products_list(query, category_id=category_id, page=page, context=context)
+
+
 async def show_products_list(query, category_id=None, subcategory_id=None, page=0, context=None):
     """Show list of products for a category or subcategory."""
     with get_db_session() as session:
@@ -293,11 +323,18 @@ async def show_products_list(query, category_id=None, subcategory_id=None, page=
         from telegram import InlineKeyboardMarkup
         keyboard = product_buttons.copy()
         if page_info['total_pages'] > 1:
+            if category_id:
+                page_callback_prefix = f"category_products_page_{category_id}"
+            elif subcategory_id:
+                page_callback_prefix = f"subcategory_products_page_{subcategory_id}"
+            else:
+                page_callback_prefix = "products_page"
+
             pagination_row = []
             if page > 0:
-                pagination_row.append(InlineKeyboardButton("◀️ Previous", callback_data=f"products_page_{page-1}"))
+                pagination_row.append(InlineKeyboardButton("◀️ Previous", callback_data=f"{page_callback_prefix}_{page-1}"))
             if page < page_info['total_pages'] - 1:
-                pagination_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"products_page_{page+1}"))
+                pagination_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"{page_callback_prefix}_{page+1}"))
             if pagination_row:
                 keyboard.append(pagination_row)
 

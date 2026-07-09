@@ -202,6 +202,17 @@ Fill in the variables:
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
 | `PAYMENT_CURRENCY` | ➖ | Currency for card invoices (default `USD`). Must be USD-denominated to match wallet amounts. |
+| `DANA_API_MODE` | ➖ | Set to `disabled` to use manual QRIS fallback, or any non-disabled value to enable DANA QRIS when required config is filled. |
+| `DANA_BASE_URL` | ➖ | DANA API base URL. Use `https://api.sandbox.dana.id` for sandbox and `https://api.saas.dana.id` for production. |
+| `DANA_PARTNER_ID` | ➖ | DANA partner/client ID. |
+| `DANA_CHANNEL_ID` | ➖ | Optional channel ID header sent to DANA. |
+| `DANA_MERCHANT_ID` | ➖ | DANA merchant ID. |
+| `DANA_STORE_ID` | ➖ | DANA store ID. |
+| `DANA_SUB_MERCHANT_ID` | ➖ | Optional DANA sub-merchant/external division ID. |
+| `DANA_TERMINAL_ID` | ➖ | Optional terminal ID. |
+| `DANA_PRIVATE_KEY_PATH` | ➖ | Path to the merchant RSA private key PEM used for outbound request signing. |
+| `DANA_PUBLIC_KEY_PATH` | ➖ | Path to the DANA public key PEM used for callback signature verification. |
+| `DANA_CALLBACK_URL` | ➖ | The reachable HTTPS callback URL registered in the DANA dashboard. |
 
 > The bot **will not start** until at least `BOT_TOKEN` and `ADMIN_TELEGRAM_ID` are set — it validates these on startup and exits with a clear message if either is missing.
 
@@ -240,6 +251,22 @@ With the bot running:
 > If `/admin` says access is denied or does nothing, your `ADMIN_TELEGRAM_ID` doesn’t match your account — recheck Step 1b, fix `.env`, and restart the bot.
 
 **🎉 That’s it — your bot is live.** A typical first run as admin: open `/admin` → **Product Management** → create a category, then a product, then **Restock Keys** to add inventory. As a user, `/start` → **Top Up** to fund the wallet, then buy a product.
+
+---
+
+## Optional — DANA QRIS
+
+By default, QRIS uses the manual fallback flow: admin-managed instructions, user proof upload, and manual admin approval.
+
+To use DANA QRIS via API + callback:
+
+1. Set `DANA_API_MODE` to any non-disabled value once your credentials are ready.
+2. Fill the required DANA env values (`DANA_PARTNER_ID`, `DANA_MERCHANT_ID`, `DANA_STORE_ID`, `DANA_PRIVATE_KEY_PATH`, `DANA_PUBLIC_KEY_PATH`, `DANA_CALLBACK_URL`, etc.).
+3. Register the exact HTTPS callback URL from your deployment in the DANA dashboard.
+4. Expose the webhook endpoint `POST /webhook/dana` from `webhook_server.py` on that URL.
+5. Restart the bot. When DANA config is complete, the QRIS top-up path switches from manual mode to DANA mode automatically.
+
+If the required DANA values are incomplete or `DANA_API_MODE=disabled`, QRIS automatically falls back to the current manual flow.
 
 ---
 

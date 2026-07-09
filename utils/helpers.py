@@ -5,7 +5,7 @@ from functools import wraps
 from telegram import Update
 from telegram.ext import ContextTypes
 from config.settings import settings
-from database import get_db_session, User
+from database import get_db_session, User, ProductKey, ProductType
 
 # In-memory cache for ban status (telegram_id: (is_banned, timestamp))
 _ban_cache = {}
@@ -88,11 +88,37 @@ def validate_amount(amount_str: str) -> tuple[bool, int, str]:
         return False, 0, "Invalid amount. Please enter a whole IDR amount."
 
 
-def format_product_display(product, include_description=False) -> str:
+def get_effective_product_stock(product, session=None) -> int:
+    """Return effective available stock for a product.
+
+    For AKUN products, counts unsold ProductKey rows rather than trusting
+    the cached stock_count field.  For all other product types the cached
+    stock_count is returned as-is.
+    """
+    if product.product_type != ProductType.AKUN:
+        return int(product.stock_count or 0)
+
+    owns_session = session is None
+    if owns_session:
+        session = get_db_session()
+
+    try:
+        return int(
+            session.query(ProductKey)
+            .filter_by(product_id=product.id, is_sold=False)
+            .count()
+        )
+    finally:
+        if owns_session:
+            session.close()
+
+
+def format_product_display(product, include_description=False, session=None) -> str:
     """Format product information for display."""
+    effective_stock = get_effective_product_stock(product, session=session)
     text = f"""📦 Name: {product.name}
 💰 Price: {format_price(product.price)}
-📦 In Stock: {product.stock_count}"""
+📦 In Stock: {effective_stock}"""
 
     if include_description and product.description:
         text += f"\n📝 Description: {product.description}"
@@ -115,11 +141,13 @@ def build_availability_text(products_by_category) -> str:
     """Build availability page text with products grouped by category."""
     text = "💬 Our available Products\n\n"
 
-    for category_name, products in products_by_category.items():
-        text += f"📦━━━━━{category_name}━━━━━📦\n"
-        for product in products:
-            text += f"{product.name} | {format_price(product.price)} | Available: {product.stock_count}\n"
-        text += "\n"
+    with get_db_session() as session:
+        for category_name, products in products_by_category.items():
+            text += f"📦━━━━━{category_name}━━━━━📦\n"
+            for product in products:
+                effective = get_effective_product_stock(product, session=session)
+                text += f"{product.name} | {format_price(product.price)} | Available: {effective}\n"
+            text += "\n"
 
     return text
 

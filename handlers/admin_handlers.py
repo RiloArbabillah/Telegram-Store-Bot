@@ -16,6 +16,7 @@ from utils import (
     create_admin_order_menu_keyboard, create_admin_settings_menu_keyboard,
     create_admin_broadcast_menu_keyboard, parse_keys_from_text, clear_ban_cache
 )
+from utils.helpers import get_effective_product_stock
 from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from telegram.ext import ConversationHandler
@@ -87,9 +88,10 @@ async def admin_restock_keys_callback(update: Update, context: ContextTypes.DEFA
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         keyboard = []
         for product in products[:10]:  # Show first 10
+            effective = get_effective_product_stock(product, session=session)
             keyboard.append([
                 InlineKeyboardButton(
-                    f"📦 {product.name} (Stock: {product.stock_count})",
+                    f"📦 {product.name} (Stock: {effective})",
                     callback_data=f"select_product_{product.id}"
                 )
             ])
@@ -138,8 +140,9 @@ async def admin_select_product_restock_callback(update: Update, context: Context
             "KEY2-XXXX-XXXX-XXXX"
         )
 
+        effective = get_effective_product_stock(product, session=session)
         message = f"""🔄 Restocking: {product.name}
-Current Stock: {product.stock_count}
+Current Stock: {effective}
 
 📤 Upload a .txt file with {prompt_label} (one per line)
 OR
@@ -712,9 +715,10 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
+        effective = get_effective_product_stock(product, session=session)
         await update.message.reply_text(
             f"✅ Successfully added {added_count} {restock_label} to {product.name}!\n"
-            f"New stock count: {product.stock_count}",
+            f"New stock count: {effective}",
             reply_markup=reply_markup
         )
 
@@ -776,9 +780,10 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
+        effective = get_effective_product_stock(product, session=session)
         await update.message.reply_text(
             f"✅ Successfully added {added_count} {restock_label} to {product.name}!\n"
-            f"New stock count: {product.stock_count}",
+            f"New stock count: {effective}",
             reply_markup=reply_markup
         )
 

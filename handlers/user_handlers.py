@@ -279,10 +279,11 @@ async def show_products_list(query, category_id=None, subcategory_id=None, page=
         # Paginate products
         page_info = paginate_items(products, page, page_size=5)
 
-        # Create product buttons
+        # Create product buttons (use effective stock for AKUN products)
+        from utils.helpers import get_effective_product_stock
         product_buttons = [
             [InlineKeyboardButton(
-                f"{prod.name} | {format_price(prod.price)} | Available: {prod.stock_count}",
+                f"{prod.name} | {format_price(prod.price)} | Available: {get_effective_product_stock(prod, session=session)}",
                 callback_data=f"product_{prod.id}"
             )]
             for prod in page_info['items']

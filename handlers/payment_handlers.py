@@ -496,7 +496,11 @@ async def buy_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ This product is no longer available.")
             return ConversationHandler.END
 
-        if product.stock_count == 0:
+        # Use effective stock for AKUN (unsold ProductKey rows), cached stock_count otherwise
+        from utils.helpers import get_effective_product_stock
+        effective_stock = get_effective_product_stock(product, session=session)
+
+        if effective_stock == 0:
             await query.edit_message_text("❌ This product is out of stock.")
             return ConversationHandler.END
 
@@ -504,7 +508,7 @@ async def buy_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['purchase_product_id'] = product_id
         context.user_data['purchase_product_name'] = product.name
         context.user_data['purchase_product_price'] = product.price
-        context.user_data['purchase_product_stock'] = product.stock_count
+        context.user_data['purchase_product_stock'] = effective_stock
         context.user_data['purchase_product_type'] = product.product_type
 
         # For file products, quantity is always 1
@@ -513,13 +517,13 @@ async def buy_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Skip quantity input, go straight to confirmation
             return await show_purchase_confirmation(update, context)
 
-        # For key products, ask for quantity
+        # For key/akun products, ask for quantity
         message = f"""🛒 Purchase: {product.name}
 
 💰 Price: {format_price(product.price)} each
-📦 Available: {product.stock_count}
+📦 Available: {effective_stock}
 
-💬 Please enter the quantity you want to buy (1-{product.stock_count}):"""
+💬 Please enter the quantity you want to buy (1-{effective_stock}):"""
 
         # If coming from a photo message, delete it and create new text message
         if query.message.photo:
@@ -669,6 +673,18 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Not enough stock. Only {product.stock_count} available.")
             return
 
+        # For KEY/AKUN products, also verify actual unsold inventory
+        if product.product_type in {ProductType.KEY, ProductType.AKUN}:
+            real_available = session.query(ProductKey).filter_by(
+                product_id=product.id, is_sold=False
+            ).count()
+            if real_available < quantity:
+                await query.edit_message_text(
+                    f"❌ Not enough stock. Only {real_available} available.",
+                    reply_markup=create_main_menu_keyboard()
+                )
+                return
+
         total = product.price * quantity
 
         # Check balance
@@ -700,7 +716,15 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_details = ""
         if product.product_type in {ProductType.KEY, ProductType.AKUN}:
             # Atomically assign keys/accounts from product_keys table
-            items = assign_product_keys(session, product.id, quantity, order.id)
+            try:
+                items = assign_product_keys(session, product.id, quantity, order.id)
+            except ValueError:
+                session.rollback()
+                await query.edit_message_text(
+                    f"❌ Sorry, not enough stock available for {product.name}.\nPlease try again with a lower quantity.",
+                    reply_markup=create_main_menu_keyboard()
+                )
+                return
             order_item.delivered_asset = "\n".join(items)
             label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
             order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"

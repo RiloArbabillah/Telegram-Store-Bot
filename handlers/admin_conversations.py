@@ -14,6 +14,7 @@ from utils import (
     dump_supporting_files, parse_supporting_files,
 )
 from config.settings import settings as app_settings
+from services.payments.common import is_manual_qris_expired
 from services.payments.qris_static import QrisPayloadError, decode_qr_payload_from_image
 
 # Conversation states for product creation
@@ -2316,6 +2317,12 @@ async def manual_qris_nominal_start(update: Update, context: ContextTypes.DEFAUL
             await query.answer("⚠️ Nominal override is only available for manual QRIS.", show_alert=True)
             return ConversationHandler.END
 
+        if is_manual_qris_expired(txn):
+            txn.status = TransactionStatus.EXPIRED
+            session.commit()
+            await query.answer("⏰ QRIS payment has expired.", show_alert=True)
+            return ConversationHandler.END
+
         context.user_data["manual_qris_nominal_txn_id"] = txn.id
         await query.message.reply_text(
             (
@@ -2355,6 +2362,13 @@ async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAUL
 
         if txn.payment_method != PaymentMethod.QRIS or txn.provider_name == "dana_qris":
             await update.message.reply_text("⚠️ Nominal override is only available for manual QRIS.")
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        if is_manual_qris_expired(txn):
+            txn.status = TransactionStatus.EXPIRED
+            session.commit()
+            await update.message.reply_text("⏰ QRIS payment has expired and cannot be confirmed.")
             context.user_data.clear()
             return ConversationHandler.END
 

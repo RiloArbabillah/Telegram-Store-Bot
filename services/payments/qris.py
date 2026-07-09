@@ -4,19 +4,27 @@ from __future__ import annotations
 
 import logging
 import random
+from datetime import datetime, timedelta
 
 from config.settings import settings as app_settings
 from database import PaymentMethod, Settings, Transaction, TransactionStatus
 from utils import calculate_expiry_time, format_price
 
 from .base import PaymentCreationError, PaymentPage, PaymentProvider, PaymentWebhookResult
-from .common import complete_transaction, parse_provider_metadata, update_transaction_provider_fields
+from .common import (
+    MANUAL_QRIS_EXPIRY_MINUTES,
+    complete_transaction,
+    is_manual_qris_expired,
+    parse_provider_metadata,
+    update_transaction_provider_fields,
+)
 from .dana_client import DanaClientError, generate_qris, query_payment, verify_callback_signature
 from .qris_static import QrisPayloadError, generate_dynamic_qris, parse_tlv, render_qris_png_bytes
 
 logger = logging.getLogger(__name__)
 
 DANA_ACTIVE_PROVIDERS = {"dana_qris"}
+MANUAL_QRIS_UNIQUE_CODE_MAX = 500
 
 
 class QrisProvider(PaymentProvider):
@@ -279,6 +287,8 @@ After you finish the transfer, send the payment proof in this chat as a photo or
                 "❌ QRIS manual payment is not configured yet.\n\nAdmin needs to upload a QRIS image and set payment instructions first."
             )
 
+        self._expire_stale_manual_qris(session)
+
         existing_pending = session.query(Transaction).filter_by(
             user_id=user.id,
             payment_method=self.method,
@@ -359,7 +369,7 @@ After you finish the transfer, send the payment proof in this chat as a photo or
             payment_method=self.method,
             provider_name=self.provider_name,
             status=TransactionStatus.PENDING,
-            expires_at=calculate_expiry_time(app_settings.PAYMENT_EXPIRY_HOURS),
+            expires_at=self._manual_qris_expiry_time(),
         )
         session.add(transaction)
         session.commit()
@@ -401,6 +411,8 @@ After you finish the transfer, send the payment proof in this chat as a photo or
         )
 
     def _generate_unique_code(self, session, base_amount: int) -> int:
+        self._expire_stale_manual_qris(session)
+
         used_codes = set()
         pending_transactions = session.query(Transaction).filter_by(
             payment_method=self.method,
@@ -416,13 +428,38 @@ After you finish the transfer, send the payment proof in this chat as a photo or
                 except (TypeError, ValueError):
                     continue
 
-        candidates = list(range(1, 1000))
+        candidates = list(range(1, MANUAL_QRIS_UNIQUE_CODE_MAX + 1))
         random.shuffle(candidates)
         for code in candidates:
             if code not in used_codes:
                 return code
 
         raise PaymentCreationError("❌ Too many pending QRIS payments. Please try again later.")
+
+    def _manual_qris_expiry_time(self):
+        return datetime.utcnow() + timedelta(minutes=MANUAL_QRIS_EXPIRY_MINUTES)
+
+    def _expire_stale_manual_qris(self, session) -> None:
+        now = datetime.utcnow()
+        expired = False
+        pending_transactions = session.query(Transaction).filter_by(
+            payment_method=self.method,
+            status=TransactionStatus.PENDING,
+        ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris')).all()
+
+        for transaction in pending_transactions:
+            if transaction.created_at:
+                created_at_expiry = transaction.created_at + timedelta(minutes=MANUAL_QRIS_EXPIRY_MINUTES)
+                if not transaction.expires_at or created_at_expiry < transaction.expires_at:
+                    transaction.expires_at = created_at_expiry
+                    expired = True
+
+            if is_manual_qris_expired(transaction, now=now):
+                transaction.status = TransactionStatus.EXPIRED
+                expired = True
+
+        if expired:
+            session.commit()
 
     def _build_partner_reference_no(self) -> str:
         import uuid

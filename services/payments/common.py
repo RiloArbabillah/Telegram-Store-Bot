@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import PaymentMethod, TransactionStatus, User
 
@@ -15,6 +15,8 @@ PAYMENT_METHOD_LABELS = {
     PaymentMethod.CARD: "Card",
     PaymentMethod.QRIS: "QRIS",
 }
+
+MANUAL_QRIS_EXPIRY_MINUTES = 5
 
 
 def payment_method_label(payment_method: PaymentMethod) -> str:
@@ -117,6 +119,21 @@ def update_transaction_provider_fields(
         transaction.provider_metadata = dump_provider_metadata(merged_metadata)
     if legacy_reference:
         transaction.crypto_address = legacy_reference
+
+
+def is_manual_qris_expired(transaction, *, now: datetime | None = None) -> bool:
+    """Return True once a manual QRIS transaction is past its 5-minute window."""
+    if transaction.payment_method != PaymentMethod.QRIS or transaction.provider_name == "dana_qris":
+        return False
+
+    now = now or datetime.utcnow()
+    expiry_candidates = []
+    if transaction.expires_at:
+        expiry_candidates.append(transaction.expires_at)
+    if transaction.created_at:
+        expiry_candidates.append(transaction.created_at + timedelta(minutes=MANUAL_QRIS_EXPIRY_MINUTES))
+
+    return bool(expiry_candidates and now > min(expiry_candidates))
 
 
 def complete_transaction(

@@ -526,7 +526,7 @@ def main():
     )
     job_queue.run_repeating(
         payment_handlers.check_expired_payments,
-        interval=60,
+        interval=15,
         first=30
     )
 

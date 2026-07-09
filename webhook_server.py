@@ -25,7 +25,7 @@ import requests
 from database.db import get_db_session
 from config.settings import settings
 from services.payments import get_provider
-from services.payments.common import complete_transaction, parse_provider_metadata
+from services.payments.common import complete_transaction, is_manual_qris_expired, parse_provider_metadata
 from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod, Transaction, TransactionStatus
 from utils import format_price
@@ -193,6 +193,8 @@ def find_payment_deka_duplicate(session, webhook_id: str | None):
 
 
 def find_payment_deka_pending_match(session, *, unique_code: int, amount_received: int):
+    now = datetime.utcnow()
+    expired = False
     transactions = session.query(Transaction).filter_by(
         payment_method=PaymentMethod.QRIS,
         status=TransactionStatus.PENDING,
@@ -200,6 +202,11 @@ def find_payment_deka_pending_match(session, *, unique_code: int, amount_receive
 
     for transaction in transactions:
         if not is_manual_qris_transaction(transaction):
+            continue
+
+        if is_manual_qris_expired(transaction, now=now):
+            transaction.status = TransactionStatus.EXPIRED
+            expired = True
             continue
 
         metadata = parse_provider_metadata(transaction.provider_metadata)
@@ -211,7 +218,12 @@ def find_payment_deka_pending_match(session, *, unique_code: int, amount_receive
         if payable_amount is not None and payable_amount != amount_received:
             continue
 
+        if expired:
+            session.commit()
         return transaction
+
+    if expired:
+        session.commit()
 
     return None
 

@@ -23,6 +23,7 @@ from services.payments import (
     list_payment_options,
     list_payment_providers,
 )
+from services.payments.common import is_manual_qris_expired, parse_provider_metadata
 from config.settings import settings as app_settings
 
 # Conversation states for top-up
@@ -256,6 +257,16 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("ℹ️ This QRIS order is no longer awaiting proof.")
             return
 
+        if is_manual_qris_expired(transaction):
+            transaction.status = TransactionStatus.EXPIRED
+            session.commit()
+            context.user_data.pop('pending_qris_transaction_id', None)
+            await update.message.reply_text(
+                "⏰ This QRIS order has expired. Please create a new top-up request.",
+                reply_markup=create_main_menu_keyboard()
+            )
+            return
+
         user = session.query(User).filter_by(id=transaction.user_id).first()
         if not user or user.telegram_id != update.effective_user.id:
             return
@@ -274,7 +285,6 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
 
         username = update.effective_user.username or f"ID:{update.effective_user.id}"
         amount = transaction.amount
-        from services.payments.common import parse_provider_metadata
         metadata = parse_provider_metadata(transaction.provider_metadata)
         payable_amount = int(metadata.get("payable_amount") or amount)
         unique_code = int(metadata.get("unique_code") or 0)

@@ -19,6 +19,7 @@ from utils import (
 from utils.helpers import get_effective_product_stock
 from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
+from services.payments.common import is_manual_qris_expired
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
@@ -1272,6 +1273,13 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
 
         if txn.status != TransactionStatus.PENDING:
             await query.answer(f"⚠️ Transaction is already {txn.status.value}", show_alert=True)
+            return
+
+        if is_manual_qris_expired(txn):
+            txn.status = TransactionStatus.EXPIRED
+            session.commit()
+            await query.answer("⏰ QRIS payment has expired.", show_alert=True)
+            await admin_confirm_order_menu(update, context)
             return
 
         notification = complete_transaction(session, txn)

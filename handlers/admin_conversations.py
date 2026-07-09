@@ -8,11 +8,16 @@ from database import (
     get_db_session, Category, Subcategory, Product, ProductType, Settings,
     Transaction, TransactionStatus, PaymentMethod, User,
 )
-from utils import is_admin, format_price, validate_amount, create_admin_product_menu_keyboard, create_admin_category_menu_keyboard
+from utils import (
+    is_admin, format_price, validate_amount,
+    create_admin_product_menu_keyboard, create_admin_category_menu_keyboard,
+    dump_supporting_files, parse_supporting_files,
+)
 from config.settings import settings as app_settings
+from services.payments.qris_static import QrisPayloadError, decode_qr_payload_from_image
 
 # Conversation states for product creation
-PRODUCT_NAME, PRODUCT_DESC, PRODUCT_PRICE, PRODUCT_TYPE, PRODUCT_CATEGORY, PRODUCT_SUBCATEGORY, PRODUCT_IMAGE, PRODUCT_DOWNLOAD_LINK, PRODUCT_KEYS = range(9)
+PRODUCT_NAME, PRODUCT_DESC, PRODUCT_PRICE, PRODUCT_TYPE, PRODUCT_CATEGORY, PRODUCT_SUBCATEGORY, PRODUCT_IMAGE, PRODUCT_DOWNLOAD_LINK, PRODUCT_KEYS, PRODUCT_SUPPORTING_FILES = range(10)
 
 # Conversation states for category management
 CATEGORY_NAME, CATEGORY_DESC = range(2)
@@ -21,7 +26,7 @@ CATEGORY_NAME, CATEGORY_DESC = range(2)
 SUBCATEGORY_CATEGORY, SUBCATEGORY_NAME = range(2)
 
 # Conversation states for product edit
-EDIT_SELECT_PRODUCT, EDIT_SELECT_FIELD, EDIT_NEW_VALUE, EDIT_IMAGE_VALUE = range(4)
+EDIT_SELECT_PRODUCT, EDIT_SELECT_FIELD, EDIT_NEW_VALUE, EDIT_IMAGE_VALUE, EDIT_SUPPORTING_FILES_VALUE = range(5)
 
 # Conversation states for category edit
 EDIT_CATEGORY_SELECT, EDIT_CATEGORY_FIELD, EDIT_CATEGORY_VALUE = range(3)
@@ -374,7 +379,9 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Store keys temporarily
             context.user_data['product_keys'] = keys
 
-            # Create product with keys
+            if context.user_data['product_type'] == ProductType.AKUN:
+                return await ask_akun_supporting_files(update, context)
+
             await create_product_final(update, context)
             return ConversationHandler.END
 
@@ -390,6 +397,9 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text.lower() == 'skip':
             # Skip adding keys for now
             context.user_data['product_keys'] = []
+            if context.user_data['product_type'] == ProductType.AKUN:
+                return await ask_akun_supporting_files(update, context)
+
             await create_product_final(update, context)
             return ConversationHandler.END
 
@@ -406,7 +416,9 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Store keys temporarily
         context.user_data['product_keys'] = keys
 
-        # Create product with keys
+        if context.user_data['product_type'] == ProductType.AKUN:
+            return await ask_akun_supporting_files(update, context)
+
         await create_product_final(update, context)
         return ConversationHandler.END
 
@@ -416,6 +428,53 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(cancel_keyboard)
         )
         return PRODUCT_KEYS
+
+
+async def ask_akun_supporting_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask admin to upload optional supporting files for an AKUN product."""
+    context.user_data['product_supporting_files'] = []
+    cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_product")]]
+    await update.message.reply_text(
+        "📎 Upload supporting files for this account product.\n\n"
+        "Send one or more documents. Type 'done' when finished, or 'skip' to create without files.",
+        reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+    )
+    return PRODUCT_SUPPORTING_FILES
+
+
+async def product_supporting_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect optional supporting documents for a new AKUN product."""
+    cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_product")]]
+
+    if update.message.document:
+        document = update.message.document
+        files = context.user_data.setdefault('product_supporting_files', [])
+        files.append({
+            "file_id": document.file_id,
+            "file_name": document.file_name or "file",
+            "mime_type": document.mime_type or "",
+        })
+        await update.message.reply_text(
+            f"✅ File added ({len(files)} total). Send another document, type 'done', or type 'skip' to clear files.",
+            reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+        )
+        return PRODUCT_SUPPORTING_FILES
+
+    if update.message.text:
+        text = update.message.text.strip().lower()
+        if text == 'skip':
+            context.user_data['product_supporting_files'] = []
+            await create_product_final(update, context)
+            return ConversationHandler.END
+        if text == 'done':
+            await create_product_final(update, context)
+            return ConversationHandler.END
+
+    await update.message.reply_text(
+        "❌ Please upload a document, type 'done', or type 'skip':",
+        reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+    )
+    return PRODUCT_SUPPORTING_FILES
 
 
 async def create_product_final(update, context):
@@ -440,6 +499,7 @@ async def create_product_final(update, context):
             subcategory_id=context.user_data.get('product_subcategory'),
             image_path=context.user_data.get('product_image'),
             download_link=context.user_data.get('product_download_link'),
+            supporting_files=dump_supporting_files(context.user_data.get('product_supporting_files')),
             stock_count=stock_count,
             is_active=True
         )
@@ -475,6 +535,10 @@ Product ID: #{product.id}"""
             message += f"\n🔐 {label} Added: {keys_added}"
         elif context.user_data['product_type'] in {ProductType.KEY, ProductType.AKUN}:
             message += "\n\n⚠️ No keys added. Use the Restock Keys option to add inventory."
+
+        supporting_files = context.user_data.get('product_supporting_files') or []
+        if context.user_data['product_type'] == ProductType.AKUN and supporting_files:
+            message += f"\n📎 Supporting Files: {len(supporting_files)}"
 
         # Create keyboard with options
         keyboard = [
@@ -1219,6 +1283,7 @@ async def edit_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Get available inventory count
         from database import ProductKey
         available_keys = session.query(ProductKey).filter_by(product_id=product.id, is_sold=False).count()
+        supporting_files_count = len(parse_supporting_files(product.supporting_files))
 
         inventory_label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
 
@@ -1233,9 +1298,13 @@ async def edit_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("✅ Activate", callback_data="edit_activate")],
             [InlineKeyboardButton("❌ Deactivate", callback_data="edit_deactivate")],
             [InlineKeyboardButton(f"🗑 Clear {inventory_label} ({available_keys})", callback_data="edit_clear_keys")],
+        ]
+        if product.product_type == ProductType.AKUN:
+            keyboard.append([InlineKeyboardButton(f"📎 File Pelengkap ({supporting_files_count})", callback_data="edit_supporting_files")])
+        keyboard.extend([
             [InlineKeyboardButton("🗑 Delete Product", callback_data="edit_delete")],
             [InlineKeyboardButton("🔙 Cancel", callback_data="cancel_edit")]
-        ]
+        ])
 
         current_status = "Active" if product.is_active else "Inactive"
 
@@ -1420,6 +1489,29 @@ async def edit_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return EDIT_NEW_VALUE
 
+    if query.data == "edit_supporting_files":
+        with get_db_session() as session:
+            product = session.query(Product).filter_by(id=context.user_data['edit_product_id']).first()
+            if not product or product.product_type != ProductType.AKUN:
+                await query.edit_message_text(
+                    "❌ Supporting files are only available for account products.",
+                    reply_markup=create_admin_product_menu_keyboard()
+                )
+                context.user_data.clear()
+                return ConversationHandler.END
+
+            current_count = len(parse_supporting_files(product.supporting_files))
+            context.user_data['edit_supporting_files'] = []
+
+        cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_edit")]]
+        await query.edit_message_text(
+            f"📎 Current supporting files: {current_count}\n\n"
+            "Upload replacement documents for this account product. "
+            "Type 'done' when finished, or 'skip' to remove all supporting files.",
+            reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+        )
+        return EDIT_SUPPORTING_FILES_VALUE
+
     context.user_data['edit_field'] = query.data.split("_")[1]
     field = context.user_data['edit_field']
 
@@ -1440,6 +1532,62 @@ async def edit_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(cancel_keyboard)
     )
     return EDIT_NEW_VALUE
+
+
+async def edit_supporting_files_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Replace supporting documents for an AKUN product."""
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if query.data == "cancel_edit":
+            await query.edit_message_text(
+                "❌ Product edit cancelled.",
+                reply_markup=create_admin_product_menu_keyboard()
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+    cancel_keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_edit")]]
+
+    if update.message and update.message.document:
+        document = update.message.document
+        files = context.user_data.setdefault('edit_supporting_files', [])
+        files.append({
+            "file_id": document.file_id,
+            "file_name": document.file_name or "file",
+            "mime_type": document.mime_type or "",
+        })
+        await update.message.reply_text(
+            f"✅ File added ({len(files)} total). Send another document, type 'done', or type 'skip' to clear files.",
+            reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+        )
+        return EDIT_SUPPORTING_FILES_VALUE
+
+    if update.message and update.message.text:
+        text = update.message.text.strip().lower()
+        if text in {'done', 'skip'}:
+            files = [] if text == 'skip' else context.user_data.get('edit_supporting_files', [])
+            with get_db_session() as session:
+                product = session.query(Product).filter_by(id=context.user_data['edit_product_id']).first()
+                product.supporting_files = dump_supporting_files(files)
+                session.commit()
+
+            keyboard = [
+                [InlineKeyboardButton("✏️ Edit Another Product", callback_data="admin_edit_product")],
+                [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
+            ]
+            await update.message.reply_text(
+                f"✅ Supporting files updated. Total files: {len(files)}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            context.user_data.clear()
+            return ConversationHandler.END
+
+    await update.message.reply_text(
+        "❌ Please upload a document, type 'done', or type 'skip':",
+        reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+    )
+    return EDIT_SUPPORTING_FILES_VALUE
 
 
 async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2110,6 +2258,18 @@ async def qris_image_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from utils import create_admin_settings_menu_keyboard
 
     photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    image_bytes = bytes(await file.download_as_bytearray())
+
+    try:
+        qris_payload = decode_qr_payload_from_image(image_bytes)
+    except QrisPayloadError as exc:
+        await update.message.reply_text(
+            f"❌ Failed to read QRIS image: {exc}\n\nPlease upload a clear static QRIS image.",
+            reply_markup=create_admin_settings_menu_keyboard()
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
 
     with get_db_session() as session:
         settings = session.query(Settings).first()
@@ -2118,11 +2278,12 @@ async def qris_image_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.add(settings)
 
         settings.qris_image_file_id = photo.file_id
+        settings.qris_static_payload = qris_payload
         settings.updated_at = datetime.utcnow()
         session.commit()
 
     await update.message.reply_text(
-        "✅ QRIS image updated successfully!",
+        "✅ QRIS image decoded and saved successfully!",
         reply_markup=create_admin_settings_menu_keyboard()
     )
 

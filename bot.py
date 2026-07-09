@@ -113,6 +113,11 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_conversations.product_keys),
                 CallbackQueryHandler(admin_conversations.cancel_product_creation, pattern="^cancel_product$")
             ],
+            admin_conversations.PRODUCT_SUPPORTING_FILES: [
+                MessageHandler(filters.Document.ALL, admin_conversations.product_supporting_files),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_conversations.product_supporting_files),
+                CallbackQueryHandler(admin_conversations.cancel_product_creation, pattern="^cancel_product$")
+            ],
         },
         fallbacks=[
             MessageHandler(filters.COMMAND, admin_conversations.cancel_product_creation),
@@ -147,6 +152,11 @@ def main():
                 MessageHandler(filters.PHOTO, admin_conversations.edit_image_value),
                 CallbackQueryHandler(admin_conversations.edit_image_value, pattern="^remove_product_image$"),
                 CallbackQueryHandler(admin_conversations.edit_image_value, pattern="^cancel_edit$")
+            ],
+            admin_conversations.EDIT_SUPPORTING_FILES_VALUE: [
+                MessageHandler(filters.Document.ALL, admin_conversations.edit_supporting_files_value),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_conversations.edit_supporting_files_value),
+                CallbackQueryHandler(admin_conversations.edit_supporting_files_value, pattern="^cancel_edit$")
             ],
         },
         fallbacks=[

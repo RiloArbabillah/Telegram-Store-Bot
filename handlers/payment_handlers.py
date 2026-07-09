@@ -1,5 +1,6 @@
 """Payment and wallet management handlers."""
 
+from io import BytesIO
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
@@ -12,7 +13,7 @@ from utils import (
     get_or_create_user, format_price, validate_amount,
     create_cancel_keyboard, create_payment_method_keyboard,
     create_quantity_keyboard, create_main_menu_keyboard,
-    notify_admin, check_user_banned
+    notify_admin, check_user_banned, parse_supporting_files
 )
 from services.payments import (
     PaymentCreationError,
@@ -100,6 +101,20 @@ def _payment_page_markup(payment_page):
 async def _send_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_page):
     """Render a provider payment page, optionally with media."""
     query = update.callback_query
+
+    if payment_page.photo_bytes:
+        await query.edit_message_text(
+            "✅ Payment instructions sent below. Complete the payment there and follow the next step in chat."
+        )
+        photo = BytesIO(payment_page.photo_bytes)
+        photo.name = payment_page.photo_filename or "qris.png"
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=photo,
+            caption=payment_page.message,
+            reply_markup=_payment_page_markup(payment_page),
+        )
+        return
 
     if payment_page.photo_file_id:
         await query.edit_message_text(
@@ -259,6 +274,10 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
 
         username = update.effective_user.username or f"ID:{update.effective_user.id}"
         amount = transaction.amount
+        from services.payments.common import parse_provider_metadata
+        metadata = parse_provider_metadata(transaction.provider_metadata)
+        payable_amount = int(metadata.get("payable_amount") or amount)
+        unique_code = int(metadata.get("unique_code") or 0)
         transaction_id = transaction.id
 
     context.user_data.pop('pending_qris_transaction_id', None)
@@ -273,6 +292,8 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
         f"🆔 Transaction: #{transaction_id}\n"
         f"👤 User: @{username}\n"
         f"💰 Requested Top-up: {format_price(amount)}\n\n"
+        f"🔢 Unique Code: {unique_code:03d}\n"
+        f"✅ Expected Paid: {format_price(payable_amount)}\n\n"
         f"Review the proof and choose an action:"
     )
     admin_keyboard = InlineKeyboardMarkup([
@@ -715,6 +736,7 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Deliver assets based on product type
         order_details = ""
+        supporting_files_to_send = []
         if product.product_type in {ProductType.KEY, ProductType.AKUN}:
             # Atomically assign keys/accounts from product_keys table
             try:
@@ -729,6 +751,10 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_item.delivered_asset = "\n".join(items)
             label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
             order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
+            if product.product_type == ProductType.AKUN:
+                supporting_files_to_send = parse_supporting_files(product.supporting_files)
+                if supporting_files_to_send:
+                    order_details += f"📎 Supporting files: {len(supporting_files_to_send)} file(s) will be sent after this message.\n"
 
         elif product.product_type == ProductType.FILE:
             # Provide download link
@@ -765,6 +791,16 @@ Thank you for your purchase!"""
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(user_message, reply_markup=reply_markup)
+
+        for file_info in supporting_files_to_send:
+            try:
+                await context.bot.send_document(
+                    chat_id=telegram_id,
+                    document=file_info["file_id"],
+                    caption=f"📎 {product.name} - {file_info.get('file_name', 'Supporting file')}"
+                )
+            except Exception:
+                pass
 
         # Notify admin
         admin_message = f"""🛍 New Order Received

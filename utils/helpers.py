@@ -1,5 +1,6 @@
 """Helper utility functions for the Telegram bot."""
 
+import json
 from datetime import datetime, timedelta
 from functools import wraps
 from telegram import Update
@@ -156,6 +157,50 @@ def parse_keys_from_text(text: str) -> list:
     """Parse keys from text input (one key per line)."""
     keys = [line.strip() for line in text.split('\n') if line.strip()]
     return keys
+
+
+def parse_supporting_files(raw_value: str | None) -> list[dict]:
+    """Parse product supporting files stored as JSON text."""
+    if not raw_value:
+        return []
+
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, ValueError):
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    files = []
+    for item in parsed:
+        if isinstance(item, dict) and item.get("file_id"):
+            files.append({
+                "file_id": str(item["file_id"]),
+                "file_name": str(item.get("file_name") or "file"),
+                "mime_type": str(item.get("mime_type") or ""),
+            })
+
+    return files
+
+
+def dump_supporting_files(files: list[dict] | None) -> str | None:
+    """Serialize product supporting file metadata to JSON text."""
+    normalized = []
+    for item in files or []:
+        file_id = item.get("file_id")
+        if not file_id:
+            continue
+        normalized.append({
+            "file_id": str(file_id),
+            "file_name": str(item.get("file_name") or "file"),
+            "mime_type": str(item.get("mime_type") or ""),
+        })
+
+    if not normalized:
+        return None
+
+    return json.dumps(normalized, ensure_ascii=False)
 
 
 def check_user_banned(telegram_id: int) -> bool:

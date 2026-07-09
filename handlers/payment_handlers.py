@@ -725,6 +725,7 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 💰 Total Amount: {format_price(total)}
 📝 Order ID: #{order.id}
+💳 Remaining Balance: {format_price(user.wallet_balance)}
 
 {order_details}
 Thank you for your purchase!"""

@@ -698,11 +698,12 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Deliver assets based on product type
         order_details = ""
-        if product.product_type == ProductType.KEY:
-            # Atomically assign keys from product_keys table
-            keys = assign_product_keys(session, product.id, quantity, order.id)
-            order_item.delivered_asset = "\n".join(keys)
-            order_details = f"📦 {product.name} (x{quantity})\n🔐 Keys:\n{order_item.delivered_asset}\n"
+        if product.product_type in {ProductType.KEY, ProductType.AKUN}:
+            # Atomically assign keys/accounts from product_keys table
+            items = assign_product_keys(session, product.id, quantity, order.id)
+            order_item.delivered_asset = "\n".join(items)
+            label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
+            order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
 
         elif product.product_type == ProductType.FILE:
             # Provide download link

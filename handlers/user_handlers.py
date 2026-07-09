@@ -528,8 +528,9 @@ async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAU
 
             # Add delivered assets (keys or download links)
             if item.delivered_asset:
-                if item.product.product_type == ProductType.KEY:
-                    items_text += f"  🔐 Keys:\n{item.delivered_asset}\n"
+                if item.product.product_type in {ProductType.KEY, ProductType.AKUN}:
+                    label = "Accounts" if item.product.product_type == ProductType.AKUN else "Keys"
+                    items_text += f"  🔐 {label}:\n{item.delivered_asset}\n"
                 elif item.product.product_type == ProductType.FILE:
                     items_text += f"  🔗 Download: {item.delivered_asset}\n"
             items_text += "\n"

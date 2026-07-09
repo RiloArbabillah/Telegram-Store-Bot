@@ -38,6 +38,14 @@ def _admin_payment_label(transaction):
     return method_label
 
 
+def _is_manual_qris_transaction(transaction) -> bool:
+    """Return True for manual QRIS transactions only."""
+    return (
+        transaction.payment_method.value == "qris"
+        and transaction.provider_name != "dana_qris"
+    )
+
+
 @admin_only
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /admin command - show admin panel."""
@@ -1271,20 +1279,25 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
 
         user = session.query(User).filter_by(id=txn.user_id).first()
         user_telegram_id = user.telegram_id if user else None
-        amount = txn.amount
+        requested_amount = txn.amount
+        credited_amount = notification.amount if notification else (txn.confirmed_amount or txn.amount)
         new_balance = user.wallet_balance if user else 0
 
-        await query.answer(f"✅ Payment confirmed! {format_price(amount)} added to user's wallet.", show_alert=True)
+        await query.answer(f"✅ Payment confirmed! {format_price(credited_amount)} added to user's wallet.", show_alert=True)
 
         # Notify user
         if user_telegram_id and notification:
+            override_note = ""
+            if credited_amount != requested_amount:
+                override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
             try:
                 await context.bot.send_message(
                     chat_id=user_telegram_id,
                     text=(
                         f"✅ Payment Confirmed!\n\n"
                         f"💳 Method: {_admin_payment_label(txn)}\n"
-                        f"💰 Amount: {format_price(amount)}\n"
+                        f"💰 Credited Amount: {format_price(credited_amount)}"
+                        f"{override_note}\n"
                         f"💵 New Balance: {format_price(new_balance)}"
                     )
                 )

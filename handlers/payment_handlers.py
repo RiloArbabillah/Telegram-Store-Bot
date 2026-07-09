@@ -272,11 +272,12 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
         f"📱 QRIS Proof Submitted\n\n"
         f"🆔 Transaction: #{transaction_id}\n"
         f"👤 User: @{username}\n"
-        f"💰 Amount: {format_price(amount)}\n\n"
+        f"💰 Requested Top-up: {format_price(amount)}\n\n"
         f"Review the proof and choose an action:"
     )
     admin_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirm Payment", callback_data=f"confirm_payment_{transaction_id}")],
+        [InlineKeyboardButton("✅ Confirm Default", callback_data=f"confirm_payment_{transaction_id}")],
+        [InlineKeyboardButton("✏️ Input Nominal", callback_data=f"input_payment_nominal_{transaction_id}")],
         [InlineKeyboardButton("❌ Reject Payment", callback_data=f"cancel_payment_{transaction_id}")],
     ])
 

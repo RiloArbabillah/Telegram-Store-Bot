@@ -349,6 +349,23 @@ def main():
     )
     application.add_handler(config_qris_image_conv)
 
+    manual_qris_nominal_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_conversations.manual_qris_nominal_start, pattern="^input_payment_nominal_")],
+        states={
+            admin_conversations.MANUAL_QRIS_NOMINAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_conversations.manual_qris_nominal_value),
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.COMMAND & filters.User(settings.ADMIN_TELEGRAM_ID), admin_conversations.cancel_manual_qris_nominal),
+            CallbackQueryHandler(admin_conversations.cancel_manual_qris_nominal, pattern="^cancel$")
+        ],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+    )
+    application.add_handler(manual_qris_nominal_conv)
+
     # Text-only broadcast conversation
     broadcast_text_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_conversations.broadcast_text_start, pattern="^admin_broadcast_text$")],

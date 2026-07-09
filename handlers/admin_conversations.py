@@ -5,7 +5,8 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from database import (
-    get_db_session, Category, Subcategory, Product, ProductType, Settings
+    get_db_session, Category, Subcategory, Product, ProductType, Settings,
+    Transaction, TransactionStatus, PaymentMethod, User,
 )
 from utils import is_admin, format_price, validate_amount, create_admin_product_menu_keyboard, create_admin_category_menu_keyboard
 from config.settings import settings as app_settings
@@ -36,6 +37,9 @@ BROADCAST_TEXT, BROADCAST_IMAGE = range(2)
 
 # Conversation states for welcome message and media settings
 WELCOME_MESSAGE, STORE_LOGO, QRIS_IMAGE = range(3)
+
+# Conversation state for manual QRIS nominal override
+MANUAL_QRIS_NOMINAL = 200
 
 
 # ==================== PRODUCT CREATION FLOW ====================
@@ -2122,6 +2126,123 @@ async def qris_image_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=create_admin_settings_menu_keyboard()
     )
 
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def manual_qris_nominal_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start admin nominal override flow for a manual QRIS payment."""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(update.effective_user.id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return ConversationHandler.END
+
+    txn_id = int(query.data.split("_")[-1])
+
+    with get_db_session() as session:
+        txn = session.query(Transaction).filter_by(id=txn_id).first()
+        if not txn:
+            await query.edit_message_text("❌ Transaction not found.")
+            return ConversationHandler.END
+
+        if txn.status != TransactionStatus.PENDING:
+            await query.answer(f"⚠️ Transaction is already {txn.status.value}", show_alert=True)
+            return ConversationHandler.END
+
+        if txn.payment_method != PaymentMethod.QRIS or txn.provider_name == "dana_qris":
+            await query.answer("⚠️ Nominal override is only available for manual QRIS.", show_alert=True)
+            return ConversationHandler.END
+
+        context.user_data["manual_qris_nominal_txn_id"] = txn.id
+        await query.message.reply_text(
+            (
+                f"✏️ Input nominal verifikasi QRIS\n\n"
+                f"🆔 Transaction: #{txn.id}\n"
+                f"💰 Nominal default: {format_price(txn.amount)}\n\n"
+                f"Kirim nominal yang benar dalam IDR.\n"
+                f"Jika sama, kirim nilai default di atas."
+            )
+        )
+        return MANUAL_QRIS_NOMINAL
+
+
+async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm a manual QRIS payment with an admin-entered nominal."""
+    txn_id = context.user_data.get("manual_qris_nominal_txn_id")
+    if not txn_id:
+        await update.message.reply_text("❌ Session expired. Please start the QRIS verification again.")
+        return ConversationHandler.END
+
+    is_valid, credited_amount, error_message = validate_amount(update.message.text)
+    if not is_valid:
+        await update.message.reply_text(f"❌ {error_message}\n\nMasukkan nominal IDR yang valid.")
+        return MANUAL_QRIS_NOMINAL
+
+    with get_db_session() as session:
+        txn = session.query(Transaction).filter_by(id=txn_id).first()
+        if not txn:
+            await update.message.reply_text("❌ Transaction not found.")
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        if txn.status != TransactionStatus.PENDING:
+            await update.message.reply_text(f"⚠️ Transaction is already {txn.status.value}.")
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        if txn.payment_method != PaymentMethod.QRIS or txn.provider_name == "dana_qris":
+            await update.message.reply_text("⚠️ Nominal override is only available for manual QRIS.")
+            context.user_data.clear()
+            return ConversationHandler.END
+
+        requested_amount = txn.amount
+        notification = complete_transaction(session, txn, credited_amount=credited_amount)
+        session.commit()
+
+        user = session.query(User).filter_by(id=txn.user_id).first()
+        new_balance = user.wallet_balance if user else 0
+
+    override_note = ""
+    if credited_amount != requested_amount:
+        override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
+
+    if notification and notification.user_telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=notification.user_telegram_id,
+                text=(
+                    f"✅ Payment Confirmed!\n\n"
+                    f"💳 Method: QRIS (manual)\n"
+                    f"💰 Credited Amount: {format_price(credited_amount)}"
+                    f"{override_note}\n"
+                    f"💵 New Balance: {format_price(new_balance)}"
+                )
+            )
+        except Exception:
+            pass
+
+    await update.message.reply_text(
+        (
+            f"✅ QRIS payment confirmed.\n\n"
+            f"💰 Credited Amount: {format_price(credited_amount)}"
+            f"{override_note}"
+        ),
+        reply_markup=create_admin_order_menu_keyboard(),
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def cancel_manual_qris_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel manual QRIS nominal override flow."""
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("❌ Input nominal QRIS dibatalkan.")
+    else:
+        await update.message.reply_text("❌ Input nominal QRIS dibatalkan.")
     context.user_data.clear()
     return ConversationHandler.END
 

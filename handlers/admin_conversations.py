@@ -107,6 +107,7 @@ async def product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🔑 Software Key", callback_data="type_key")],
             [InlineKeyboardButton("📁 Downloadable File", callback_data="type_file")],
+            [InlineKeyboardButton("👤 Account", callback_data="type_akun")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_product")]
         ]
         await update.message.reply_text(
@@ -136,7 +137,12 @@ async def product_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         return ConversationHandler.END
 
-    product_type = ProductType.KEY if query.data == "type_key" else ProductType.FILE
+    type_map = {
+        "type_key": ProductType.KEY,
+        "type_file": ProductType.FILE,
+        "type_akun": ProductType.AKUN,
+    }
+    product_type = type_map.get(query.data, ProductType.KEY)
     context.user_data['product_type'] = product_type
 
     # Get categories and show selection
@@ -252,6 +258,16 @@ async def product_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(cancel_keyboard)
             )
             return PRODUCT_DOWNLOAD_LINK
+        elif context.user_data['product_type'] == ProductType.AKUN:
+            await update.message.reply_text(
+                "👤 Please paste the account credentials (one per line) or upload a .txt file:\n\n"
+                "Example:\n"
+                "email1@example.com----password1\n"
+                "email2@example.com----password2\n\n"
+                "Or type 'skip' to add accounts later.",
+                reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+            )
+            return PRODUCT_KEYS
         else:
             # Ask for keys for KEY products
             await update.message.reply_text(
@@ -285,6 +301,16 @@ async def product_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(cancel_keyboard)
             )
             return PRODUCT_DOWNLOAD_LINK
+        elif context.user_data['product_type'] == ProductType.AKUN:
+            await update.message.reply_text(
+                "👤 Please paste the account credentials (one per line) or upload a .txt file:\n\n"
+                "Example:\n"
+                "email1@example.com----password1\n"
+                "email2@example.com----password2\n\n"
+                "Or type 'skip' to add accounts later.",
+                reply_markup=InlineKeyboardMarkup(cancel_keyboard)
+            )
+            return PRODUCT_KEYS
         else:
             # Ask for keys for KEY products
             await update.message.reply_text(
@@ -368,7 +394,7 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not keys:
             await update.message.reply_text(
-                "❌ No valid keys found. Please paste keys (one per line), upload a .txt file, or type 'skip':",
+                "❌ No valid entries found. Please paste one per line, upload a .txt file, or type 'skip':",
                 reply_markup=InlineKeyboardMarkup(cancel_keyboard)
             )
             return PRODUCT_KEYS
@@ -382,7 +408,7 @@ async def product_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         await update.message.reply_text(
-            "❌ Please paste keys, upload a .txt file, or type 'skip':",
+            "❌ Please paste entries, upload a .txt file, or type 'skip':",
             reply_markup=InlineKeyboardMarkup(cancel_keyboard)
         )
         return PRODUCT_KEYS
@@ -419,7 +445,7 @@ async def create_product_final(update, context):
 
         # Add keys to product_keys table if provided
         keys_added = 0
-        if product_keys and context.user_data['product_type'] == ProductType.KEY:
+        if product_keys and context.user_data['product_type'] in {ProductType.KEY, ProductType.AKUN}:
             for key_value in product_keys:
                 product_key = ProductKey(
                     product_id=product.id,
@@ -441,8 +467,9 @@ async def create_product_final(update, context):
 Product ID: #{product.id}"""
 
         if keys_added > 0:
-            message += f"\n🔑 Keys Added: {keys_added}"
-        elif context.user_data['product_type'] == ProductType.KEY:
+            label = "Accounts" if context.user_data['product_type'] == ProductType.AKUN else "Keys"
+            message += f"\n🔐 {label} Added: {keys_added}"
+        elif context.user_data['product_type'] in {ProductType.KEY, ProductType.AKUN}:
             message += "\n\n⚠️ No keys added. Use the Restock Keys option to add inventory."
 
         # Create keyboard with options
@@ -1185,9 +1212,11 @@ async def edit_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE
             subcategory = session.query(Subcategory).filter_by(id=product.subcategory_id).first()
             subcategory_name = subcategory.name if subcategory else "None"
 
-        # Get available keys count
+        # Get available inventory count
         from database import ProductKey
         available_keys = session.query(ProductKey).filter_by(product_id=product.id, is_sold=False).count()
+
+        inventory_label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
 
         # Show fields to edit
         keyboard = [
@@ -1199,7 +1228,7 @@ async def edit_select_product(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("📂 Subcategory", callback_data="edit_subcategory")],
             [InlineKeyboardButton("✅ Activate", callback_data="edit_activate")],
             [InlineKeyboardButton("❌ Deactivate", callback_data="edit_deactivate")],
-            [InlineKeyboardButton(f"🗑 Clear Keys ({available_keys})", callback_data="edit_clear_keys")],
+            [InlineKeyboardButton(f"🗑 Clear {inventory_label} ({available_keys})", callback_data="edit_clear_keys")],
             [InlineKeyboardButton("🗑 Delete Product", callback_data="edit_delete")],
             [InlineKeyboardButton("🔙 Cancel", callback_data="cancel_edit")]
         ]

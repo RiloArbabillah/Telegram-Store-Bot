@@ -71,12 +71,14 @@ async def admin_restock_keys_callback(update: Update, context: ContextTypes.DEFA
         return
 
     with get_db_session() as session:
-        # Get all KEY type products
-        products = session.query(Product).filter_by(product_type=ProductType.KEY).all()
+        # Get all KEY/AKUN type products
+        products = session.query(Product).filter(
+            Product.product_type.in_([ProductType.KEY, ProductType.AKUN])
+        ).all()
 
         if not products:
             await query.edit_message_text(
-                "❌ No KEY products found. Please create a product first.",
+                "❌ No KEY or AKUN products found. Please create a product first.",
                 reply_markup=create_admin_product_menu_keyboard()
             )
             return
@@ -126,17 +128,25 @@ async def admin_select_product_restock_callback(update: Update, context: Context
             )
             return
 
+        is_akun = product.product_type == ProductType.AKUN
+        prompt_label = "account credentials" if is_akun else "keys"
+        example_lines = (
+            "email1@example.com----password1\n"
+            "email2@example.com----password2"
+        ) if is_akun else (
+            "KEY1-XXXX-XXXX-XXXX\n"
+            "KEY2-XXXX-XXXX-XXXX"
+        )
+
         message = f"""🔄 Restocking: {product.name}
 Current Stock: {product.stock_count}
 
-📤 Upload a .txt file with keys (one per line)
+📤 Upload a .txt file with {prompt_label} (one per line)
 OR
-✍️ Paste keys directly (one per line)
+✍️ Paste {prompt_label} directly (one per line)
 
 Example:
-KEY1-XXXX-XXXX-XXXX
-KEY2-XXXX-XXXX-XXXX
-KEY3-XXXX-XXXX-XXXX"""
+{example_lines}"""
 
         # Create keyboard with cancel button
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -648,7 +658,7 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
     document = update.message.document
 
     if not document:
-        await update.message.reply_text("❌ Please upload a text file with keys. Try again or /cancel")
+        await update.message.reply_text("❌ Please upload a text file. Try again or /cancel")
         return WAITING_FOR_KEYS
 
     # Download file
@@ -660,7 +670,7 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
     keys = parse_keys_from_text(text)
 
     if not keys:
-        await update.message.reply_text("❌ No keys found in file. Try again or /cancel")
+        await update.message.reply_text("❌ No valid entries found in file. Try again or /cancel")
         return WAITING_FOR_KEYS
 
     # Get product ID from context (should be set earlier)
@@ -695,14 +705,15 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
 
         # Create keyboard with options
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        restock_label = "accounts" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
-            [InlineKeyboardButton("🔄 Restock More Keys", callback_data="admin_restock_keys")],
+            [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
             [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"✅ Successfully added {added_count} keys to {product.name}!\n"
+            f"✅ Successfully added {added_count} {restock_label} to {product.name}!\n"
             f"New stock count: {product.stock_count}",
             reply_markup=reply_markup
         )
@@ -714,7 +725,7 @@ async def handle_restock_keys_file(update: Update, context: ContextTypes.DEFAULT
 
 
 async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle pasted keys for restocking."""
+    """Handle pasted keys/accounts for restocking."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Access denied.")
         return ConversationHandler.END
@@ -723,7 +734,7 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
     keys = parse_keys_from_text(update.message.text)
 
     if not keys:
-        await update.message.reply_text("❌ No keys found. Please paste keys (one per line). Try again or /cancel")
+        await update.message.reply_text("❌ No valid entries found. Please paste one per line. Try again or /cancel")
         return WAITING_FOR_KEYS
 
     # Get product ID from context (should be set earlier)
@@ -758,14 +769,15 @@ async def handle_restock_keys_paste(update: Update, context: ContextTypes.DEFAUL
 
         # Create keyboard with options
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        restock_label = "accounts" if product.product_type == ProductType.AKUN else "keys"
         keyboard = [
-            [InlineKeyboardButton("🔄 Restock More Keys", callback_data="admin_restock_keys")],
+            [InlineKeyboardButton(f"🔄 Restock More {restock_label.title()}", callback_data="admin_restock_keys")],
             [InlineKeyboardButton("🔙 Back to Product Menu", callback_data="admin_products")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"✅ Successfully added {added_count} keys to {product.name}!\n"
+            f"✅ Successfully added {added_count} {restock_label} to {product.name}!\n"
             f"New stock count: {product.stock_count}",
             reply_markup=reply_markup
         )
@@ -1083,8 +1095,9 @@ async def admin_order_detail_callback(update: Update, context: ContextTypes.DEFA
 
             # Add delivered assets (keys or download links)
             if item.delivered_asset:
-                if product and product.product_type == ProductType.KEY:
-                    message += f"  🔐 Keys:\n{item.delivered_asset}\n"
+                if product and product.product_type in {ProductType.KEY, ProductType.AKUN}:
+                    label = "Accounts" if product.product_type == ProductType.AKUN else "Keys"
+                    message += f"  🔐 {label}:\n{item.delivered_asset}\n"
                 elif product and product.product_type == ProductType.FILE:
                     message += f"  🔗 Download: {item.delivered_asset}\n"
                 message += "\n"

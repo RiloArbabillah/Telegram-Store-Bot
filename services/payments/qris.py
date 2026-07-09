@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
+import random
 
 from config.settings import settings as app_settings
 from database import PaymentMethod, Settings, Transaction, TransactionStatus
 from utils import calculate_expiry_time, format_price
 
 from .base import PaymentCreationError, PaymentPage, PaymentProvider, PaymentWebhookResult
-from .common import complete_transaction, update_transaction_provider_fields
+from .common import complete_transaction, parse_provider_metadata, update_transaction_provider_fields
 from .dana_client import DanaClientError, generate_qris, query_payment, verify_callback_signature
+from .qris_static import QrisPayloadError, generate_dynamic_qris, parse_tlv, render_qris_png_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -270,11 +272,11 @@ After you finish the transfer, send the payment proof in this chat as a photo or
     def _create_manual_payment(self, session, user, amount: float):
         admin_settings = session.query(Settings).first()
         instructions_text = admin_settings.qris_instructions_text.strip() if admin_settings and admin_settings.qris_instructions_text else ""
-        image_file_id = admin_settings.qris_image_file_id if admin_settings and admin_settings.qris_image_file_id else None
+        static_payload = admin_settings.qris_static_payload.strip() if admin_settings and admin_settings.qris_static_payload else ""
 
-        if not instructions_text:
+        if not instructions_text or not static_payload:
             raise PaymentCreationError(
-                "❌ QRIS manual payment is not configured yet.\n\nAdmin needs to set QRIS instructions first."
+                "❌ QRIS manual payment is not configured yet.\n\nAdmin needs to upload a QRIS image and set payment instructions first."
             )
 
         existing_pending = session.query(Transaction).filter_by(
@@ -285,19 +287,71 @@ After you finish the transfer, send the payment proof in this chat as a photo or
 
         if existing_pending:
             expiry_text = existing_pending.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if existing_pending.expires_at else 'N/A'
+            metadata = parse_provider_metadata(existing_pending.provider_metadata)
+            unique_code = metadata.get("unique_code")
+            payable_amount = metadata.get("payable_amount")
+            metadata_missing = unique_code is None or payable_amount is None
+            if unique_code is None or payable_amount is None:
+                unique_code = self._generate_unique_code(session, int(existing_pending.amount))
+                payable_amount = int(existing_pending.amount) + int(unique_code)
+            unique_code = int(unique_code)
+            payable_amount = int(payable_amount)
+
+            try:
+                parse_tlv(existing_pending.qr_payload or "")
+            except QrisPayloadError:
+                existing_pending.qr_payload = None
+
+            if metadata_missing or not existing_pending.qr_payload:
+                try:
+                    if metadata_missing or not existing_pending.qr_payload:
+                        existing_pending.qr_payload = generate_dynamic_qris(static_payload, int(payable_amount))
+                    update_transaction_provider_fields(
+                        existing_pending,
+                        provider_name=self.provider_name,
+                        provider_metadata={
+                            "mode": "manual_review",
+                            "unique_code": int(unique_code),
+                            "payable_amount": int(payable_amount),
+                        },
+                    )
+                    session.commit()
+                except QrisPayloadError as exc:
+                    raise PaymentCreationError(f"❌ Failed to generate QRIS payment: {exc}") from exc
             message = f"""📱 QRIS Payment
 
-💰 Amount: {format_price(existing_pending.amount)}
-🆔 Order ID: #{existing_pending.id}
+            💰 Amount: {format_price(existing_pending.amount)}
+            🔢 Unique Code: {unique_code:03d}
+            ✅ Pay Exactly: {format_price(payable_amount)}
+            🆔 Order ID: #{existing_pending.id}
 
-Transfer the exact amount using the QRIS details below:
+            Scan the QRIS code below and pay the exact amount.
 
-{instructions_text}
+            {instructions_text}
 
-After you finish the transfer, send the payment proof in this chat as a photo or document.
+            After you finish the transfer, send the payment proof in this chat as a photo or document.
 
-⏰ Expires: {expiry_text}"""
-            return existing_pending, PaymentPage(message=message, photo_file_id=image_file_id)
+            ⏰ Expires: {expiry_text}"""
+            try:
+                photo_bytes = render_qris_png_bytes(existing_pending.qr_payload)
+            except QrisPayloadError as exc:
+                raise PaymentCreationError(f"❌ Failed to render QRIS payment: {exc}") from exc
+
+            return existing_pending, PaymentPage(
+                message=message,
+                photo_bytes=photo_bytes,
+                photo_filename=f"qris-{existing_pending.id}.png",
+            )
+
+        unique_code = self._generate_unique_code(session, int(amount))
+        payable_amount = int(amount) + unique_code
+        manual_reference = f"qris-manual-{random.randrange(10**8, 10**9)}"
+
+        try:
+            dynamic_payload = generate_dynamic_qris(static_payload, payable_amount)
+            photo_bytes = render_qris_png_bytes(dynamic_payload)
+        except QrisPayloadError as exc:
+            raise PaymentCreationError(f"❌ Failed to generate QRIS payment: {exc}") from exc
 
         transaction = Transaction(
             user_id=user.id,
@@ -311,31 +365,66 @@ After you finish the transfer, send the payment proof in this chat as a photo or
         session.commit()
         session.refresh(transaction)
 
-        manual_reference = f"qris-manual-{transaction.id}"
         update_transaction_provider_fields(
             transaction,
             provider_name=self.provider_name,
             external_reference=manual_reference,
-            qr_payload=instructions_text,
-            provider_metadata={"mode": "manual_review"},
+            qr_payload=dynamic_payload,
+            provider_metadata={
+                "mode": "manual_review",
+                "unique_code": unique_code,
+                "payable_amount": payable_amount,
+            },
         )
         session.commit()
 
         expiry_text = transaction.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if transaction.expires_at else 'N/A'
         message = f"""📱 QRIS Payment
 
-💰 Amount: {format_price(amount)}
-🆔 Order ID: #{transaction.id}
+        💰 Amount: {format_price(amount)}
+        🔢 Unique Code: {unique_code:03d}
+        ✅ Pay Exactly: {format_price(payable_amount)}
+        🆔 Order ID: #{transaction.id}
 
-Transfer the exact amount using the QRIS details below:
+        Scan the QRIS code below and pay the exact amount.
 
-{instructions_text}
+        {instructions_text}
 
-After you finish the transfer, send the payment proof in this chat as a photo or document.
+        After you finish the transfer, send the payment proof in this chat as a photo or document.
 
-⏰ Expires: {expiry_text}"""
+        ⏰ Expires: {expiry_text}"""
 
-        return transaction, PaymentPage(message=message, photo_file_id=image_file_id)
+        return transaction, PaymentPage(
+            message=message,
+            photo_bytes=photo_bytes,
+            photo_filename=f"qris-{transaction.id}.png",
+        )
+
+    def _generate_unique_code(self, session, base_amount: int) -> int:
+        used_codes = set()
+        pending_transactions = session.query(Transaction).filter_by(
+            payment_method=self.method,
+            status=TransactionStatus.PENDING,
+        ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris')).all()
+
+        for transaction in pending_transactions:
+            if int(transaction.amount) != int(base_amount):
+                continue
+            metadata = parse_provider_metadata(transaction.provider_metadata)
+            unique_code = metadata.get("unique_code")
+            if unique_code is not None:
+                try:
+                    used_codes.add(int(unique_code))
+                except (TypeError, ValueError):
+                    continue
+
+        candidates = list(range(1, 1000))
+        random.shuffle(candidates)
+        for code in candidates:
+            if code not in used_codes:
+                return code
+
+        raise PaymentCreationError("❌ Too many pending QRIS payments for this amount. Please try again later.")
 
     def _build_partner_reference_no(self) -> str:
         import uuid

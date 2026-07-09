@@ -408,8 +408,6 @@ After you finish the transfer, send the payment proof in this chat as a photo or
         ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris')).all()
 
         for transaction in pending_transactions:
-            if int(transaction.amount) != int(base_amount):
-                continue
             metadata = parse_provider_metadata(transaction.provider_metadata)
             unique_code = metadata.get("unique_code")
             if unique_code is not None:
@@ -424,7 +422,7 @@ After you finish the transfer, send the payment proof in this chat as a photo or
             if code not in used_codes:
                 return code
 
-        raise PaymentCreationError("❌ Too many pending QRIS payments for this amount. Please try again later.")
+        raise PaymentCreationError("❌ Too many pending QRIS payments. Please try again later.")
 
     def _build_partner_reference_no(self) -> str:
         import uuid

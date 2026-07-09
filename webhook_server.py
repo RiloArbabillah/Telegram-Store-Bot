@@ -4,13 +4,15 @@ This server receives real-time payment notifications from supported
 providers and applies the same normalized transaction finalization flow.
 
 Setup:
-1. Install Flask: pip install flask
+1. Install dependencies: pip install -r requirements.txt
 2. For local testing, use ngrok: ngrok http 5000
-3. Configure webhook in CryptoBot:
-   - Open @CryptoBot in Telegram
-   - Go to Crypto Pay → My Apps → Select your app → Webhooks
-   - Enable webhooks and set URL: https://your-domain.com/webhook/cryptobot
-4. For production, deploy this on a server with HTTPS
+3. For CryptoBot webhook:
+   - Set webhook URL: https://your-domain.com/webhook/cryptobot
+4. For DANA QRIS callback:
+   - Set required DANA env vars in .env
+   - Set callback URL: https://your-domain.com/webhook/dana
+   - Register that URL in the DANA dashboard
+5. For production, deploy this on a server with HTTPS
 """
 
 from flask import Flask, request, jsonify
@@ -21,6 +23,7 @@ from datetime import datetime
 from database.db import get_db_session
 from config.settings import settings
 from services.payments import get_provider
+from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod
 
 app = Flask(__name__)
@@ -116,6 +119,37 @@ def cryptobot_webhook():
 
     except Exception as e:
         print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/webhook/dana', methods=['POST'])
+def dana_webhook():
+    try:
+        body = request.get_data()
+        headers = {k: v for k, v in request.headers.items()}
+
+        if not verify_callback_signature(headers=headers, body_bytes=body):
+            print("❌ Invalid DANA webhook signature")
+            return jsonify({'error': 'Invalid signature'}), 401
+
+        data = request.get_json(force=True, silent=True) or {}
+        print("📩 DANA Webhook received:")
+        print(json.dumps(data, indent=2))
+
+        payload = dict(data)
+        payload['__headers'] = headers
+        payload['__raw'] = body
+
+        handled = process_provider_webhook(PaymentMethod.QRIS, payload)
+        if not handled:
+            print("⚠️ No pending transaction matched this DANA webhook")
+
+        return jsonify({'responseCode': '2000000', 'responseMessage': 'OK'}), 200
+
+    except Exception as e:
+        print(f"❌ DANA webhook error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

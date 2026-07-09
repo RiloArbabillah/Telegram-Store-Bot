@@ -210,18 +210,26 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
             if not user:
                 return
 
-            transaction = session.query(Transaction).filter_by(
-                user_id=user.id,
-                payment_method=PaymentMethod.QRIS,
-                status=TransactionStatus.PENDING,
-            ).order_by(Transaction.created_at.desc()).first()
+            transaction = (
+                session.query(Transaction)
+                .filter_by(
+                    user_id=user.id,
+                    payment_method=PaymentMethod.QRIS,
+                    status=TransactionStatus.PENDING,
+                )
+                .filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris'))
+                .order_by(Transaction.created_at.desc())
+                .first()
+            )
 
         if not transaction:
-            context.user_data.pop('pending_qris_transaction_id', None)
             return
 
-        if transaction.payment_method != PaymentMethod.QRIS or transaction.status != TransactionStatus.PENDING:
-            context.user_data.pop('pending_qris_transaction_id', None)
+        if transaction.payment_method != PaymentMethod.QRIS or transaction.provider_name == 'dana_qris':
+            return
+
+        if transaction.status != TransactionStatus.PENDING:
+            await update.message.reply_text("ℹ️ This QRIS order is no longer awaiting proof.")
             return
 
         user = session.query(User).filter_by(id=transaction.user_id).first()

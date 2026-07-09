@@ -1,15 +1,24 @@
-"""Manual QRIS fallback provider until a gateway is selected."""
+"""QRIS provider with manual fallback and optional DANA API mode."""
+
+from __future__ import annotations
+
+import logging
 
 from config.settings import settings as app_settings
 from database import PaymentMethod, Settings, Transaction, TransactionStatus
 from utils import calculate_expiry_time, format_price
 
-from .base import PaymentCreationError, PaymentPage, PaymentProvider
-from .common import update_transaction_provider_fields
+from .base import PaymentCreationError, PaymentPage, PaymentProvider, PaymentWebhookResult
+from .common import complete_transaction, update_transaction_provider_fields
+from .dana_client import DanaClientError, generate_qris, query_payment, verify_callback_signature
+
+logger = logging.getLogger(__name__)
+
+DANA_ACTIVE_PROVIDERS = {"dana_qris"}
 
 
 class QrisProvider(PaymentProvider):
-    """Manual-review QRIS provider."""
+    """Dual-mode QRIS provider: manual fallback or DANA API."""
 
     method = PaymentMethod.QRIS
     provider_name = "qris"
@@ -19,6 +28,10 @@ class QrisProvider(PaymentProvider):
         return True
 
     def create_payment(self, session, user, amount: float):
+        if app_settings.DANA_ENABLED:
+            return self._create_dana_payment(session, user, amount)
+
+        return self._create_manual_payment(session, user, amount)
         settings = session.query(Settings).first()
         instructions_text = settings.qris_instructions_text.strip() if settings and settings.qris_instructions_text else ""
         image_file_id = settings.qris_image_file_id if settings and settings.qris_image_file_id else None
@@ -87,3 +100,298 @@ After you finish the transfer, send the payment proof in this chat as a photo or
 ⏰ Expires: {expiry_text}"""
 
         return transaction, PaymentPage(message=message, photo_file_id=image_file_id)
+
+    def poll_transaction(self, session, transaction):
+        if not self._is_dana_transaction(transaction):
+            return None
+
+        partner_reference_no = transaction.external_reference
+        if not partner_reference_no:
+            return None
+
+        # Give callbacks a head-start: skip polling very fresh transactions.
+        if self._is_fresh_transaction(transaction):
+            return None
+
+        try:
+            result = query_payment(partner_reference_no=partner_reference_no)
+        except DanaClientError:
+            logger.exception("DANA query failed for transaction %s", transaction.id)
+            return None
+
+        self._apply_dana_status(session, transaction, result.status_code, result.payload, source="poll")
+
+        if transaction.provider_paid_at and transaction.status != TransactionStatus.COMPLETED:
+            return complete_transaction(
+                session,
+                transaction,
+                provider_name="dana_qris",
+                external_reference=transaction.external_reference,
+                checkout_url=transaction.checkout_url,
+                provider_metadata={"finalized_via": "poll"},
+            )
+
+        session.commit()
+        return None
+
+    def process_webhook(self, session, payload: dict):
+        payload = payload if isinstance(payload, dict) else {}
+        headers = payload.pop("__headers", {})
+
+        if not verify_callback_signature(headers=headers, body_bytes=payload.get("__raw", b"")):
+            return PaymentWebhookResult(handled=False)
+
+        partner_reference_no = payload.get("originalPartnerReferenceNo") or payload.get("partnerReferenceNo")
+        status_code = str(payload.get("latestTransactionStatus") or payload.get("transactionStatus") or "")
+
+        transaction = None
+        if partner_reference_no:
+            transaction = session.query(Transaction).filter_by(
+                payment_method=self.method,
+                external_reference=str(partner_reference_no),
+            ).first()
+
+        if not transaction:
+            logger.warning("No DANA transaction found for callback reference %s", partner_reference_no)
+            return PaymentWebhookResult(handled=False)
+
+        # If already terminal, acknowledge without re-processing.
+        if transaction.status in {
+            TransactionStatus.COMPLETED,
+            TransactionStatus.FAILED,
+            TransactionStatus.EXPIRED,
+        }:
+            logger.debug("DANA callback for already-terminal transaction %s", transaction.id)
+            return PaymentWebhookResult(handled=True)
+
+        self._apply_dana_status(session, transaction, status_code, payload, source="callback")
+
+        if transaction.provider_paid_at and transaction.status != TransactionStatus.COMPLETED:
+            notification = complete_transaction(
+                session,
+                transaction,
+                provider_name="dana_qris",
+                external_reference=transaction.external_reference,
+                checkout_url=transaction.checkout_url,
+                provider_metadata={"finalized_via": "callback"},
+            )
+            return PaymentWebhookResult(handled=True, notification=notification)
+
+        session.commit()
+        return PaymentWebhookResult(handled=True)
+
+    def _is_dana_transaction(self, transaction) -> bool:
+        return transaction.provider_name in DANA_ACTIVE_PROVIDERS or (
+            isinstance(transaction.provider_metadata, str) and "dana_api" in transaction.provider_metadata
+        )
+
+    def _is_fresh_transaction(self, transaction, *, seconds: int = 30) -> bool:
+        """Return True if the transaction was created within the last *seconds* seconds."""
+        from datetime import datetime, timedelta
+
+        if not transaction.created_at:
+            return False
+        return transaction.created_at > datetime.utcnow() - timedelta(seconds=seconds)
+
+    def _create_dana_payment(self, session, user, amount: float):
+        pending_transaction = session.query(Transaction).filter_by(
+            user_id=user.id,
+            payment_method=self.method,
+            status=TransactionStatus.PENDING,
+            provider_name="dana_qris",
+        ).order_by(Transaction.created_at.desc()).first()
+
+        if pending_transaction:
+            qr_content = pending_transaction.qr_payload or "Scan the stored QRIS code."
+            checkout_url = pending_transaction.checkout_url or ""
+            expiry_text = pending_transaction.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if pending_transaction.expires_at else 'N/A'
+            message = self._dana_page_message(
+                transaction_id=pending_transaction.id,
+                amount=pending_transaction.amount,
+                qr_content=qr_content,
+                checkout_url=checkout_url,
+                expiry_text=expiry_text,
+            )
+            button_url = checkout_url if checkout_url else None
+            return pending_transaction, PaymentPage(message=message, button_text="Open payment page" if button_url else None, button_url=button_url)
+
+        partner_reference_no = self._build_partner_reference_no()
+        transaction = Transaction(
+            user_id=user.id,
+            amount=amount,
+            payment_method=self.method,
+            provider_name="dana_qris",
+            status=TransactionStatus.PENDING,
+            expires_at=calculate_expiry_time(app_settings.PAYMENT_EXPIRY_HOURS),
+        )
+        session.add(transaction)
+        session.commit()
+        session.refresh(transaction)
+
+        try:
+            qr_result = generate_qris(
+                partner_reference_no=partner_reference_no,
+                amount_idr=amount,
+            )
+        except DanaClientError:
+            session.delete(transaction)
+            session.commit()
+            raise PaymentCreationError("❌ Failed to create QRIS payment. Please try again.")
+
+        update_transaction_provider_fields(
+            transaction,
+            provider_name="dana_qris",
+            external_reference=partner_reference_no,
+            checkout_url=qr_result.qr_url or qr_result.redirect_url,
+            qr_payload=qr_result.qr_content,
+            provider_metadata={
+                "mode": "dana_api",
+                "reference_no": qr_result.reference_no,
+                "qr_content": qr_result.qr_content,
+                "qr_url": qr_result.qr_url,
+                "qr_image": qr_result.qr_image,
+                "redirect_url": qr_result.redirect_url,
+                "raw": qr_result.payload,
+            },
+        )
+        session.commit()
+
+        expiry_text = transaction.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if transaction.expires_at else 'N/A'
+        message = self._dana_page_message(
+            transaction_id=transaction.id,
+            amount=transaction.amount,
+            qr_content=qr_result.qr_content,
+            checkout_url=qr_result.qr_url or qr_result.redirect_url,
+            expiry_text=expiry_text,
+        )
+        button_url = qr_result.qr_url or qr_result.redirect_url
+        return transaction, PaymentPage(message=message, button_text="Open payment page" if button_url else None, button_url=button_url)
+
+    def _create_manual_payment(self, session, user, amount: float):
+        admin_settings = session.query(Settings).first()
+        instructions_text = admin_settings.qris_instructions_text.strip() if admin_settings and admin_settings.qris_instructions_text else ""
+        image_file_id = admin_settings.qris_image_file_id if admin_settings and admin_settings.qris_image_file_id else None
+
+        if not instructions_text:
+            raise PaymentCreationError(
+                "❌ QRIS manual payment is not configured yet.\n\nAdmin needs to set QRIS instructions first."
+            )
+
+        existing_pending = session.query(Transaction).filter_by(
+            user_id=user.id,
+            payment_method=self.method,
+            status=TransactionStatus.PENDING,
+        ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris')).order_by(Transaction.created_at.desc()).first()
+
+        if existing_pending:
+            expiry_text = existing_pending.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if existing_pending.expires_at else 'N/A'
+            message = f"""📱 QRIS Payment
+
+💰 Amount: {format_price(existing_pending.amount)}
+🆔 Order ID: #{existing_pending.id}
+
+Transfer the exact amount using the QRIS details below:
+
+{instructions_text}
+
+After you finish the transfer, send the payment proof in this chat as a photo or document.
+
+⏰ Expires: {expiry_text}"""
+            return existing_pending, PaymentPage(message=message, photo_file_id=image_file_id)
+
+        transaction = Transaction(
+            user_id=user.id,
+            amount=amount,
+            payment_method=self.method,
+            provider_name=self.provider_name,
+            status=TransactionStatus.PENDING,
+            expires_at=calculate_expiry_time(app_settings.PAYMENT_EXPIRY_HOURS),
+        )
+        session.add(transaction)
+        session.commit()
+        session.refresh(transaction)
+
+        manual_reference = f"qris-manual-{transaction.id}"
+        update_transaction_provider_fields(
+            transaction,
+            provider_name=self.provider_name,
+            external_reference=manual_reference,
+            qr_payload=instructions_text,
+            provider_metadata={"mode": "manual_review"},
+        )
+        session.commit()
+
+        expiry_text = transaction.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if transaction.expires_at else 'N/A'
+        message = f"""📱 QRIS Payment
+
+💰 Amount: {format_price(amount)}
+🆔 Order ID: #{transaction.id}
+
+Transfer the exact amount using the QRIS details below:
+
+{instructions_text}
+
+After you finish the transfer, send the payment proof in this chat as a photo or document.
+
+⏰ Expires: {expiry_text}"""
+
+        return transaction, PaymentPage(message=message, photo_file_id=image_file_id)
+
+    def _build_partner_reference_no(self) -> str:
+        import uuid
+        return f"QR{uuid.uuid4().hex}"[:25]
+
+    def _apply_dana_status(self, session, transaction, status_code: str, payload: dict, *, source: str) -> None:
+        from datetime import datetime
+
+        # Guard: never overwrite terminal states from duplicate callbacks/polls.
+        if transaction.status in {
+            TransactionStatus.COMPLETED,
+            TransactionStatus.FAILED,
+            TransactionStatus.EXPIRED,
+        }:
+            logger.debug(
+                "Skipping DANA status update for terminal transaction %s (status=%s)",
+                transaction.id,
+                transaction.status,
+            )
+            return
+
+        # Strip transport-only fields before persisting as metadata.
+        clean_payload = {
+            k: v for k, v in payload.items() if k not in {"__raw", "__headers"}
+        }
+
+        update_transaction_provider_fields(
+            transaction,
+            provider_name="dana_qris",
+            provider_metadata={
+                "last_status_code": status_code,
+                "last_status_source": source,
+                f"last_{source}_payload": clean_payload,
+            },
+        )
+        transaction.provider_status_code = status_code or transaction.provider_status_code
+        transaction.provider_status_text = clean_payload.get("transactionStatusDesc") or clean_payload.get("responseMessage") or transaction.provider_status_text
+
+        now = datetime.utcnow()
+        transaction.callback_received_at = now if source == "callback" else transaction.callback_received_at
+
+        # Record timestamps only; callers are responsible for terminal status transitions.
+        if status_code == "00":
+            transaction.provider_paid_at = transaction.provider_paid_at or now
+
+    def _dana_page_message(self, *, transaction_id: int, amount: float, qr_content: str | None, checkout_url: str | None, expiry_text: str) -> str:
+        qr_section = qr_content or "Open the payment page to complete the scan."
+        link_line = f"\nPayment link: {checkout_url}" if checkout_url else ""
+        return f"""📱 QRIS Payment
+
+💰 Amount: {format_price(amount)}
+🆔 Order ID: #{transaction_id}
+
+Scan the QRIS code below to pay the exact amount:
+{qr_section}{link_line}
+
+This payment completes automatically after the callback is received.
+
+⏰ Expires: {expiry_text}"""

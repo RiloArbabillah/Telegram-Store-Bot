@@ -1,6 +1,6 @@
 """Database models for the Telegram digital products store bot."""
 
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Enum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -51,7 +51,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False, index=True)
     username = Column(String(255))
-    wallet_balance = Column(Float, default=0.0)
+    wallet_balance = Column(Integer, default=0)
     is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -96,7 +96,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    price = Column(Float, nullable=False)
+    price = Column(Integer, nullable=False)
     stock_count = Column(Integer, default=0)
     product_type = Column(Enum(ProductType), nullable=False)
     category_id = Column(Integer, ForeignKey('categories.id'), nullable=True)
@@ -152,7 +152,7 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
-    total_amount = Column(Float, nullable=False)
+    total_amount = Column(Integer, nullable=False)
     status = Column(Enum(OrderStatus), default=OrderStatus.PROCESSING)
     dispute_status = Column(Enum(DisputeStatus), default=DisputeStatus.NIL)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -173,7 +173,7 @@ class OrderItem(Base):
     order_id = Column(Integer, ForeignKey('orders.id'), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     quantity = Column(Integer, nullable=False)
-    price = Column(Float, nullable=False)
+    price = Column(Integer, nullable=False)
     delivered_asset = Column(Text, nullable=True)  # Keys or download link
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -188,7 +188,7 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
-    amount = Column(Float, nullable=False)
+    amount = Column(Integer, nullable=False)
     payment_method = Column(Enum(PaymentMethod), nullable=False)
     provider_name = Column(String(100), nullable=True)
     external_reference = Column(String(255), nullable=True)

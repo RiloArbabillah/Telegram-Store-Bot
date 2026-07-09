@@ -47,11 +47,11 @@ class Settings:
     CRYPTO_BOT_API_KEY = _get_env('CRYPTO_BOT_API_KEY')
 
     # Telegram Payments (Card) Settings
-    # Provider token from @BotFather → your bot → Payments → connect a provider.
+    # Provider token from @BotFather -> your bot -> Payments -> connect a provider.
     TELEGRAM_PROVIDER_TOKEN = _get_env('TELEGRAM_PROVIDER_TOKEN')
-    # Currency the card invoice is charged in. The numeric amount equals the USD
-    # top-up value, so this must be a USD-denominated provider for amounts to match.
-    PAYMENT_CURRENCY = _get_env('PAYMENT_CURRENCY', 'USD') or 'USD'
+    # The bot now treats all business amounts as whole-rupiah IDR.
+    # Non-IDR payment providers must be disabled until explicitly adapted.
+    PAYMENT_CURRENCY = _get_env('PAYMENT_CURRENCY', 'IDR') or 'IDR'
 
     # Application Settings
     PAYMENT_EXPIRY_HOURS = 0.5  # Payment order expiration time (30 minutes)

@@ -43,9 +43,10 @@ def get_or_create_user(telegram_id: int, username: str = None):
         return user
 
 
-def format_price(price: float) -> str:
-    """Format price to standard USD format."""
-    return f"${price:.2f}"
+def format_price(price: int | float) -> str:
+    """Format price using IDR whole-rupiah display."""
+    normalized = int(round(price or 0))
+    return f"Rp{normalized:,}".replace(",", ".")
 
 
 def format_datetime(dt: datetime) -> str:
@@ -73,17 +74,18 @@ def paginate_items(items, page: int, page_size: int = 5):
     }
 
 
-def validate_amount(amount_str: str) -> tuple[bool, float, str]:
-    """Validate user input for payment amount."""
+def validate_amount(amount_str: str) -> tuple[bool, int, str]:
+    """Validate user input for IDR whole-rupiah amounts."""
     try:
-        amount = float(amount_str.strip())
+        normalized_str = amount_str.strip().replace("Rp", "").replace("rp", "").replace(".", "").replace(",", "")
+        amount = int(normalized_str)
         if amount <= 0:
             return False, 0, "Amount must be greater than zero."
-        if amount > 100000:
-            return False, 0, "Amount is too large. Maximum is $100,000."
+        if amount > 100000000:
+            return False, 0, "Amount is too large. Maximum is Rp100.000.000."
         return True, amount, ""
     except ValueError:
-        return False, 0, "Invalid amount. Please enter a valid number."
+        return False, 0, "Invalid amount. Please enter a whole IDR amount."
 
 
 def format_product_display(product, include_description=False) -> str:

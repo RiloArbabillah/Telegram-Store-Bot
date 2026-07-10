@@ -12,6 +12,7 @@ from services.mailbox import (
     fetch_mailbox_messages,
     mask_email,
     parse_account_credential,
+    summarize_deactivated_messages,
     summarize_messages,
 )
 from utils import (
@@ -28,7 +29,7 @@ from handlers.payment_handlers import send_supporting_file
 logger = logging.getLogger(__name__)
 
 
-def _otp_account_query(session, user_db_id: int):
+def _mailbox_account_query(session, user_db_id: int):
     """Return assigned AKUN credentials owned by a user."""
     return (
         session.query(ProductKey)
@@ -59,11 +60,50 @@ def _format_otp_result(mailbox_data: dict) -> str:
     )
 
 
-def _single_account_keyboard(product_key_id: int, order_id: int):
-    """Keyboard for an OTP result tied to one purchased account."""
+def _format_deactivated_result(mailbox_data: dict) -> str:
+    """Format mailbox deactivation search results for a buyer."""
+    email = mailbox_data.get("email") or "Unknown email"
+    total = mailbox_data.get("total", 0)
+    count = mailbox_data.get("count", 0)
+    summaries = summarize_deactivated_messages(mailbox_data, limit=10)
+    detected = bool(summaries)
+    status = "🚫 DEACTIVATED terdeteksi" if detected else "✅ Email deactivation tidak ditemukan"
+    summary_text = "\n\n".join(summaries) if summaries else "Tidak ada pesan deactivation yang ditemukan."
+    return (
+        "🚫 Cek Akun Deactivated\n\n"
+        f"Email: {email}\n"
+        f"Status: {status}\n"
+        f"Messages checked: {count}/{total}\n\n"
+        f"{summary_text}"
+    )
+
+
+def _mailbox_mode_config(mode: str) -> dict:
+    if mode == "deactivated":
+        return {
+            "base_callback": "check_deactivated",
+            "title": "🚫 Cek Akun Deactivated",
+            "empty_label": "deactivation",
+            "loading": "🚫 Checking deactivated account, please wait...",
+            "keyword": app_settings.MAILBOX_DEACTIVATED_SEARCH_KEYWORD,
+            "formatter": _format_deactivated_result,
+        }
+    return {
+        "base_callback": "check_email_otp",
+        "title": "📧 Cek OTP Email",
+        "empty_label": "OTP",
+        "loading": "📧 Checking OTP email, please wait...",
+        "keyword": app_settings.MAILBOX_SEARCH_KEYWORD,
+        "formatter": _format_otp_result,
+    }
+
+
+def _single_account_keyboard(product_key_id: int, order_id: int, *, mode: str = "otp"):
+    """Keyboard for one purchased account mailbox result."""
+    base_callback = _mailbox_mode_config(mode)["base_callback"]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data=f"check_email_otp_account_{product_key_id}")],
-        [InlineKeyboardButton("🔙 Back to Order", callback_data=f"check_email_otp_order_{order_id}")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"{base_callback}_account_{product_key_id}")],
+        [InlineKeyboardButton("🔙 Back to Order", callback_data=f"{base_callback}_order_{order_id}")],
         [InlineKeyboardButton("🏠 Home", callback_data="main_menu")],
     ])
 
@@ -620,10 +660,11 @@ async def order_history_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
-async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show completed account orders that can be checked for email OTP."""
+async def _show_mailbox_orders(update: Update, *, mode: str):
+    """Show completed account orders for one mailbox check mode."""
     query = update.callback_query
     await _safe_answer_callback(query)
+    config = _mailbox_mode_config(mode)
 
     if check_user_banned(update.effective_user.id):
         await _safe_edit_message(query, "⛔ You have been banned from using this bot.")
@@ -640,7 +681,7 @@ async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT
         order_ids = [
             row[0]
             for row in (
-                _otp_account_query(session, user.id)
+                _mailbox_account_query(session, user.id)
                 .with_entities(ProductKey.order_id)
                 .distinct()
                 .order_by(ProductKey.order_id.desc())
@@ -652,7 +693,7 @@ async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT
         if not order_ids:
             await _safe_edit_message(
                 query,
-                "📧 Belum ada akun dari order selesai yang bisa dicek OTP.",
+                f"Belum ada akun dari order selesai yang bisa dicek {config['empty_label']}.",
                 reply_markup=create_back_support_keyboard()
             )
             return
@@ -666,23 +707,29 @@ async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT
 
         keyboard = []
         for order in orders:
-            account_count = _otp_account_query(session, user.id).filter(ProductKey.order_id == order.id).count()
+            account_count = _mailbox_account_query(session, user.id).filter(ProductKey.order_id == order.id).count()
             button_text = f"✅ Order #{order.id} | {account_count} akun | {format_datetime(order.created_at)}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"check_email_otp_order_{order.id}")])
+            keyboard.append([
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"{config['base_callback']}_order_{order.id}",
+                )
+            ])
 
         keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
 
     await _safe_edit_message(
         query,
-        "📧 Cek OTP Email\n\nPilih order akun yang ingin dicek:",
+        f"{config['title']}\n\nPilih order akun yang ingin dicek:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-async def check_email_otp_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show accounts in an order or fetch directly when only one account exists."""
+async def _show_mailbox_order_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE, *, mode: str):
+    """Show accounts in an owned order for one mailbox check mode."""
     query = update.callback_query
     await _safe_answer_callback(query)
+    config = _mailbox_mode_config(mode)
 
     if check_user_banned(update.effective_user.id):
         await _safe_edit_message(query, "⛔ You have been banned from using this bot.")
@@ -707,7 +754,7 @@ async def check_email_otp_order_callback(update: Update, context: ContextTypes.D
             return
 
         accounts = (
-            _otp_account_query(session, user.id)
+            _mailbox_account_query(session, user.id)
             .filter(ProductKey.order_id == order.id)
             .order_by(ProductKey.id.asc())
             .all()
@@ -716,9 +763,9 @@ async def check_email_otp_order_callback(update: Update, context: ContextTypes.D
         if not accounts:
             await _safe_edit_message(
                 query,
-                "📧 Order ini tidak memiliki akun yang bisa dicek OTP.",
+                f"Order ini tidak memiliki akun yang bisa dicek {config['empty_label']}.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Orders", callback_data="check_email_otp")],
+                    [InlineKeyboardButton("🔙 Back to Orders", callback_data=config["base_callback"])],
                     [InlineKeyboardButton("🏠 Home", callback_data="main_menu")],
                 ])
             )
@@ -738,24 +785,24 @@ async def check_email_otp_order_callback(update: Update, context: ContextTypes.D
                 keyboard.append([
                     InlineKeyboardButton(
                         f"Akun #{index} | {email_label}",
-                        callback_data=f"check_email_otp_account_{account.id}"
+                        callback_data=f"{config['base_callback']}_account_{account.id}"
                     )
                 ])
 
-            keyboard.append([InlineKeyboardButton("🔙 Back to Orders", callback_data="check_email_otp")])
+            keyboard.append([InlineKeyboardButton("🔙 Back to Orders", callback_data=config["base_callback"])])
             keyboard.append([InlineKeyboardButton("🏠 Home", callback_data="main_menu")])
             await _safe_edit_message(
                 query,
-                f"📧 Cek OTP Email\n\nOrder #{order.id} punya {len(accounts)} akun. Pilih akun:",
+                f"{config['title']}\n\nOrder #{order.id} punya {len(accounts)} akun. Pilih akun:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
 
-    await _send_account_otp_result(update, context, product_key_id)
+    await _send_account_mailbox_result(update, context, product_key_id, mode=mode)
 
 
-async def check_email_otp_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fetch mailbox OTP for a selected purchased account."""
+async def _check_mailbox_account(update: Update, context: ContextTypes.DEFAULT_TYPE, *, mode: str):
+    """Fetch mailbox results for a selected purchased account."""
     query = update.callback_query
     await _safe_answer_callback(query, "Checking email...")
 
@@ -764,15 +811,22 @@ async def check_email_otp_account_callback(update: Update, context: ContextTypes
         return
 
     product_key_id = int(query.data.rsplit("_", 1)[1])
-    await _send_account_otp_result(update, context, product_key_id)
+    await _send_account_mailbox_result(update, context, product_key_id, mode=mode)
 
 
-async def _send_account_otp_result(update: Update, context: ContextTypes.DEFAULT_TYPE, product_key_id: int):
-    """Validate account ownership, fetch mailbox, and render OTP result."""
+async def _send_account_mailbox_result(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    product_key_id: int,
+    *,
+    mode: str,
+):
+    """Validate account ownership, fetch mailbox, and render one mode's result."""
     query = update.callback_query
     telegram_id = update.effective_user.id
+    config = _mailbox_mode_config(mode)
 
-    await _safe_edit_message(query, "📧 Checking OTP email, please wait...")
+    await _safe_edit_message(query, config["loading"])
 
     with get_db_session() as session:
         user = session.query(User).filter_by(telegram_id=telegram_id).first()
@@ -780,7 +834,7 @@ async def _send_account_otp_result(update: Update, context: ContextTypes.DEFAULT
             await _safe_edit_message(query, "❌ User not found.")
             return
 
-        account = _otp_account_query(session, user.id).filter(ProductKey.id == product_key_id).first()
+        account = _mailbox_account_query(session, user.id).filter(ProductKey.id == product_key_id).first()
         if not account:
             await _safe_edit_message(query, "❌ Account not found.")
             return
@@ -791,29 +845,60 @@ async def _send_account_otp_result(update: Update, context: ContextTypes.DEFAULT
         except ValueError:
             await _safe_edit_message(
                 query,
-                "❌ Format akun tidak valid untuk cek OTP. Hubungi support.",
+                f"❌ Format akun tidak valid untuk cek {config['empty_label']}. Hubungi support.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Order", callback_data=f"check_email_otp_order_{order_id}")],
+                    [InlineKeyboardButton(
+                        "🔙 Back to Order",
+                        callback_data=f"{config['base_callback']}_order_{order_id}",
+                    )],
                     [InlineKeyboardButton("☎️ Support", callback_data="support")],
                 ])
             )
             return
 
     try:
-        mailbox_data = await asyncio.to_thread(fetch_mailbox_messages, credential.line)
+        mailbox_data = await asyncio.to_thread(
+            fetch_mailbox_messages,
+            credential.line,
+            keyword=config["keyword"],
+        )
     except MailboxError as exc:
         await _safe_edit_message(
             query,
-            f"❌ Gagal cek email OTP.\n\n{exc}",
-            reply_markup=_single_account_keyboard(product_key_id, order_id)
+            f"❌ Gagal cek {config['empty_label']}.\n\n{exc}",
+            reply_markup=_single_account_keyboard(product_key_id, order_id, mode=mode)
         )
         return
 
     await _safe_edit_message(
         query,
-        _format_otp_result(mailbox_data),
-        reply_markup=_single_account_keyboard(product_key_id, order_id)
+        config["formatter"](mailbox_data),
+        reply_markup=_single_account_keyboard(product_key_id, order_id, mode=mode)
     )
+
+
+async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _show_mailbox_orders(update, mode="otp")
+
+
+async def check_email_otp_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _show_mailbox_order_accounts(update, context, mode="otp")
+
+
+async def check_email_otp_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _check_mailbox_account(update, context, mode="otp")
+
+
+async def check_deactivated_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _show_mailbox_orders(update, mode="deactivated")
+
+
+async def check_deactivated_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _show_mailbox_order_accounts(update, context, mode="deactivated")
+
+
+async def check_deactivated_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _check_mailbox_account(update, context, mode="deactivated")
 
 
 async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

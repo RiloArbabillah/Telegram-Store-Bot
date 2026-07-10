@@ -202,6 +202,8 @@ Fill in the variables:
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
 | `PAYMENT_CURRENCY` | ➖ | Business currency for the whole app (default `IDR`). All wallet, product, order, and top-up amounts are treated as whole rupiah. |
+| `MAILBOX_SEARCH_KEYWORD` | ➖ | Mailbox keyword for the OTP checker (default `openai`). |
+| `MAILBOX_DEACTIVATED_SEARCH_KEYWORD` | ➖ | Mailbox keyword for deactivation notices (default `deactivated`). |
 | `DANA_API_MODE` | ➖ | Set to `disabled` to use manual QRIS fallback, or any non-disabled value to enable DANA QRIS when required config is filled. |
 | `DANA_BASE_URL` | ➖ | DANA API base URL. Use `https://api.sandbox.dana.id` for sandbox and `https://api.saas.dana.id` for production. |
 | `DANA_PARTNER_ID` | ➖ | DANA partner/client ID. |

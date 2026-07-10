@@ -512,6 +512,9 @@ def main():
     application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_callback, pattern="^check_email_otp$"))
     application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_order_callback, pattern="^check_email_otp_order_"))
     application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_account_callback, pattern="^check_email_otp_account_"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_deactivated_callback, pattern="^check_deactivated$"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_deactivated_order_callback, pattern="^check_deactivated_order_"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_deactivated_account_callback, pattern="^check_deactivated_account_"))
     application.add_handler(CallbackQueryHandler(user_handlers.order_history_callback, pattern="^order_history"))
     application.add_handler(CallbackQueryHandler(user_handlers.user_order_detail_callback, pattern="^user_order_detail_"))
 

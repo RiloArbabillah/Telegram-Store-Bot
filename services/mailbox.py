@@ -178,6 +178,29 @@ def summarize_messages(mailbox_data: dict, *, limit: int = 3) -> list[str]:
     return summaries
 
 
+def summarize_deactivated_messages(mailbox_data: dict, *, limit: int = 10) -> list[str]:
+    """Build safe summaries for account deactivation mailbox results."""
+    messages = mailbox_data.get("messages") or []
+    if not isinstance(messages, list):
+        return []
+
+    summaries = []
+    for message in messages[:limit]:
+        if not isinstance(message, dict):
+            continue
+
+        subject = str(message.get("subject") or "No subject").strip()
+        sender = str(message.get("from") or "Unknown sender").strip()
+        date = str(message.get("date") or "Unknown date").strip()
+        summaries.append(
+            f"- From: {sender}\n"
+            f"  Subject: {subject}\n"
+            f"  Date: {date}"
+        )
+
+    return summaries
+
+
 def _extract_message_otp(message: dict) -> str | None:
     """Extract an OTP-like numeric value from one mailbox message."""
     body = str(message.get("body") or "")

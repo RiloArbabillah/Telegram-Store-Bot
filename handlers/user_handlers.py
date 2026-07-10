@@ -72,22 +72,30 @@ async def _safe_answer_callback(query, text: str | None = None) -> None:
     """Answer callback queries without failing the whole handler on Telegram timeouts."""
     try:
         if text:
-            await query.answer(text)
+            await asyncio.wait_for(query.answer(text), timeout=2)
         else:
-            await query.answer()
+            await asyncio.wait_for(query.answer(), timeout=2)
+    except asyncio.TimeoutError:
+        logger.warning("Telegram callback answer timed out for %s after 2 seconds", query.data)
     except (TimedOut, NetworkError) as exc:
-        logger.warning("Telegram callback answer timed out for %s: %s", query.data, exc)
+        logger.warning("Telegram callback answer failed for %s: %s", query.data, exc)
 
 
-async def _safe_edit_message(query, text: str, *, reply_markup=None, retries: int = 2) -> bool:
+async def _safe_edit_message(query, text: str, *, reply_markup=None, retries: int = 1) -> bool:
     """Edit a callback message with a short retry for transient Telegram network errors."""
     for attempt in range(retries + 1):
         try:
-            await query.edit_message_text(text, reply_markup=reply_markup)
+            await asyncio.wait_for(
+                query.edit_message_text(text, reply_markup=reply_markup),
+                timeout=5,
+            )
             return True
-        except (TimedOut, NetworkError) as exc:
+        except (asyncio.TimeoutError, TimedOut, NetworkError) as exc:
             if attempt >= retries:
-                logger.warning("Telegram message edit failed for %s: %s", query.data, exc)
+                if isinstance(exc, asyncio.TimeoutError):
+                    logger.warning("Telegram message edit timed out for %s after 5 seconds", query.data)
+                else:
+                    logger.warning("Telegram message edit failed for %s: %s", query.data, exc)
                 return False
             await asyncio.sleep(1 + attempt)
 

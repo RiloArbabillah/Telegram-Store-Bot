@@ -53,6 +53,7 @@ def main():
     application = (
         Application.builder()
         .token(settings.BOT_TOKEN)
+        .concurrent_updates(8)
         .connect_timeout(30)
         .read_timeout(30)
         .write_timeout(30)

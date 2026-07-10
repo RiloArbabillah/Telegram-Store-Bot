@@ -23,7 +23,13 @@ from services.payments import (
     list_payment_options,
     list_payment_providers,
 )
-from services.payments.common import is_manual_qris_expired, parse_provider_metadata
+from services.payments.common import (
+    get_qris_message_refs,
+    is_manual_qris_expired,
+    parse_provider_metadata,
+    register_qris_message_ref,
+)
+from services.payments.qris_messages import cleanup_qris_messages
 from config.settings import settings as app_settings
 
 # Conversation states for top-up
@@ -138,30 +144,29 @@ async def _send_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
         photo = BytesIO(payment_page.photo_bytes)
         photo.name = payment_page.photo_filename or "qris.png"
-        await context.bot.send_photo(
+        return await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=photo,
             caption=payment_page.message,
             reply_markup=_payment_page_markup(payment_page),
         )
-        return
 
     if payment_page.photo_file_id:
         await query.edit_message_text(
             "✅ Payment instructions sent below. Complete the payment there and follow the next step in chat."
         )
-        await context.bot.send_photo(
+        return await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=payment_page.photo_file_id,
             caption=payment_page.message,
             reply_markup=_payment_page_markup(payment_page),
         )
-        return
 
-    await query.edit_message_text(
+    edited_message = await query.edit_message_text(
         payment_page.message,
         reply_markup=_payment_page_markup(payment_page),
     )
+    return edited_message if hasattr(edited_message, "message_id") else query.message
 
 
 def _build_payment_notifications(notif):
@@ -226,7 +231,23 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
         else:
             context.user_data.pop('pending_qris_transaction_id', None)
 
-        await _send_payment_page(update, context, payment_page)
+        payment_message = await _send_payment_page(update, context, payment_page)
+
+        cleanup_transaction_id = None
+        if provider.method == PaymentMethod.QRIS and payment_message:
+            session.refresh(transaction)
+            register_qris_message_ref(
+                transaction,
+                chat_id=payment_message.chat_id,
+                message_id=payment_message.message_id,
+            )
+            session.commit()
+            if transaction.status in {
+                TransactionStatus.COMPLETED,
+                TransactionStatus.EXPIRED,
+                TransactionStatus.FAILED,
+            }:
+                cleanup_transaction_id = transaction.id
 
         if payment_page.invoice_request:
             prices = [
@@ -243,6 +264,9 @@ async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_
                 prices=prices,
                 start_parameter=payment_page.invoice_request["start_parameter"],
             )
+
+        if cleanup_transaction_id:
+            await cleanup_qris_messages(context.bot, cleanup_transaction_id)
 
     return ConversationHandler.END
 
@@ -289,7 +313,9 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
         if is_manual_qris_expired(transaction):
             transaction.status = TransactionStatus.EXPIRED
             session.commit()
+            expired_transaction_id = transaction.id
             context.user_data.pop('pending_qris_transaction_id', None)
+            await cleanup_qris_messages(context.bot, expired_transaction_id)
             await update.message.reply_text(
                 "⏰ This QRIS order has expired. Please create a new top-up request.",
                 reply_markup=create_main_menu_keyboard()
@@ -426,13 +452,35 @@ async def cancel_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     from utils import create_main_menu_keyboard
 
-    await query.edit_message_text(
-        "❌ Payment cancelled. You can try again anytime.",
-        reply_markup=create_main_menu_keyboard()
-    )
+    cleanup_transaction_id = None
+    pending_transaction_id = context.user_data.get('pending_qris_transaction_id')
+    if pending_transaction_id:
+        with get_db_session() as session:
+            transaction = session.query(Transaction).filter_by(id=pending_transaction_id).first()
+            if (
+                transaction
+                and transaction.payment_method == PaymentMethod.QRIS
+                and transaction.status == TransactionStatus.PENDING
+            ):
+                transaction.status = TransactionStatus.FAILED
+                cleanup_transaction_id = transaction.id
+                session.commit()
 
     # Clear user data
     context.user_data.clear()
+
+    if cleanup_transaction_id:
+        await cleanup_qris_messages(context.bot, cleanup_transaction_id)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Payment cancelled. You can try again anytime.",
+            reply_markup=create_main_menu_keyboard(),
+        )
+    else:
+        await query.edit_message_text(
+            "❌ Payment cancelled. You can try again anytime.",
+            reply_markup=create_main_menu_keyboard(),
+        )
 
 
 async def check_pending_payments(context: ContextTypes.DEFAULT_TYPE):
@@ -467,6 +515,7 @@ async def check_pending_payments(context: ContextTypes.DEFAULT_TYPE):
 
     # Send notifications asynchronously
     for notif in notifications:
+        await cleanup_qris_messages(context.bot, notif.transaction_id)
         user_message, admin_message = _build_payment_notifications(notif)
 
         try:
@@ -509,10 +558,26 @@ async def check_expired_payments(context: ContextTypes.DEFAULT_TYPE):
 
                     session.commit()
 
-        return expired_notifications
+            cleanup_transaction_ids = [
+                transaction.id
+                for transaction in session.query(Transaction).filter(
+                    Transaction.payment_method == PaymentMethod.QRIS,
+                    Transaction.status.in_([
+                        TransactionStatus.COMPLETED,
+                        TransactionStatus.EXPIRED,
+                        TransactionStatus.FAILED,
+                    ]),
+                ).all()
+                if get_qris_message_refs(transaction)
+            ]
+
+        return expired_notifications, cleanup_transaction_ids
 
     # Run blocking database operations in thread pool
-    notifications = await asyncio.to_thread(_check_expired_sync)
+    notifications, cleanup_transaction_ids = await asyncio.to_thread(_check_expired_sync)
+
+    for transaction_id in cleanup_transaction_ids:
+        await cleanup_qris_messages(context.bot, transaction_id)
 
     # Send notifications asynchronously
     for notif in notifications:

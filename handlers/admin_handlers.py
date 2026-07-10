@@ -21,6 +21,7 @@ from utils.helpers import get_effective_product_stock
 from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from services.payments.common import is_manual_qris_expired
+from services.payments.qris_messages import cleanup_qris_messages
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
@@ -1403,6 +1404,7 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
         if is_manual_qris_expired(txn):
             txn.status = TransactionStatus.EXPIRED
             session.commit()
+            await cleanup_qris_messages(context.bot, txn.id)
             await query.answer("⏰ QRIS payment has expired.", show_alert=True)
             await admin_confirm_order_menu(update, context)
             return
@@ -1415,30 +1417,34 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
         requested_amount = txn.amount
         credited_amount = notification.amount if notification else (txn.confirmed_amount or txn.amount)
         new_balance = user.wallet_balance if user else 0
+        payment_label = _admin_payment_label(txn)
+        completed_transaction_id = txn.id
 
-        await query.answer(f"✅ Payment confirmed! {format_price(credited_amount)} added to user's wallet.", show_alert=True)
+    await cleanup_qris_messages(context.bot, completed_transaction_id)
 
-        # Notify user
-        if user_telegram_id and notification:
-            override_note = ""
-            if credited_amount != requested_amount:
-                override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
-            try:
-                await context.bot.send_message(
-                    chat_id=user_telegram_id,
-                    text=(
-                        f"✅ Payment Confirmed!\n\n"
-                        f"💳 Method: {_admin_payment_label(txn)}\n"
-                        f"💰 Credited Amount: {format_price(credited_amount)}"
-                        f"{override_note}\n"
-                        f"💵 New Balance: {format_price(new_balance)}"
-                    )
+    await query.answer(f"✅ Payment confirmed! {format_price(credited_amount)} added to user's wallet.", show_alert=True)
+
+    # Notify user
+    if user_telegram_id and notification:
+        override_note = ""
+        if credited_amount != requested_amount:
+            override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
+        try:
+            await context.bot.send_message(
+                chat_id=user_telegram_id,
+                text=(
+                    f"✅ Payment Confirmed!\n\n"
+                    f"💳 Method: {payment_label}\n"
+                    f"💰 Credited Amount: {format_price(credited_amount)}"
+                    f"{override_note}\n"
+                    f"💵 New Balance: {format_price(new_balance)}"
                 )
-            except:
-                pass
+            )
+        except Exception:
+            pass
 
-        # Go back to payment confirmation menu
-        await admin_confirm_order_menu(update, context)
+    # Go back to payment confirmation menu
+    await admin_confirm_order_menu(update, context)
 
 
 async def admin_cancel_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1473,21 +1479,23 @@ async def admin_cancel_payment_callback(update: Update, context: ContextTypes.DE
         user = session.query(User).filter_by(id=txn.user_id).first()
         user_telegram_id = user.telegram_id if user else None
         amount = txn.amount
+        failed_transaction_id = txn.id
 
-        await query.answer(f"✅ Payment cancelled!", show_alert=True)
+    await cleanup_qris_messages(context.bot, failed_transaction_id)
+    await query.answer("✅ Payment cancelled!", show_alert=True)
 
-        # Notify user
-        if user_telegram_id:
-            try:
-                await context.bot.send_message(
-                    chat_id=user_telegram_id,
-                    text=f"❌ Payment Cancelled\n\n💰 Amount: {format_price(amount)}\n\nYour payment was not confirmed. Please contact support if you believe this is an error."
-                )
-            except:
-                pass
+    # Notify user
+    if user_telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=user_telegram_id,
+                text=f"❌ Payment Cancelled\n\n💰 Amount: {format_price(amount)}\n\nYour payment was not confirmed. Please contact support if you believe this is an error."
+            )
+        except Exception:
+            pass
 
-        # Go back to payment cancellation menu
-        await admin_cancel_order_menu(update, context)
+    # Go back to payment cancellation menu
+    await admin_cancel_order_menu(update, context)
 
 
 async def admin_cancel_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

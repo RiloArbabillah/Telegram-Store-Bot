@@ -17,6 +17,7 @@ PAYMENT_METHOD_LABELS = {
 }
 
 MANUAL_QRIS_EXPIRY_MINUTES = 5
+QRIS_MESSAGE_REFS_KEY = "telegram_qris_messages"
 
 
 def payment_method_label(payment_method: PaymentMethod) -> str:
@@ -42,6 +43,51 @@ def dump_provider_metadata(metadata: dict | None) -> str | None:
     if not metadata:
         return None
     return json.dumps(metadata, sort_keys=True)
+
+
+def get_qris_message_refs(transaction) -> list[dict[str, int]]:
+    """Return valid Telegram QRIS message references stored on a transaction."""
+    metadata = parse_provider_metadata(transaction.provider_metadata)
+    refs = metadata.get(QRIS_MESSAGE_REFS_KEY, [])
+    if not isinstance(refs, list):
+        return []
+
+    valid_refs = []
+    seen = set()
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        try:
+            normalized = {
+                "chat_id": int(ref["chat_id"]),
+                "message_id": int(ref["message_id"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (normalized["chat_id"], normalized["message_id"])
+        if key not in seen:
+            valid_refs.append(normalized)
+            seen.add(key)
+    return valid_refs
+
+
+def register_qris_message_ref(transaction, *, chat_id: int, message_id: int) -> None:
+    """Register one Telegram payment message for later terminal-state cleanup."""
+    refs = get_qris_message_refs(transaction)
+    new_ref = {"chat_id": int(chat_id), "message_id": int(message_id)}
+    if new_ref not in refs:
+        refs.append(new_ref)
+
+    metadata = parse_provider_metadata(transaction.provider_metadata)
+    metadata[QRIS_MESSAGE_REFS_KEY] = refs
+    transaction.provider_metadata = dump_provider_metadata(metadata)
+
+
+def retain_qris_message_refs(transaction, refs: list[dict[str, int]]) -> None:
+    """Replace the active QRIS message references after a cleanup attempt."""
+    metadata = parse_provider_metadata(transaction.provider_metadata)
+    metadata[QRIS_MESSAGE_REFS_KEY] = refs
+    transaction.provider_metadata = dump_provider_metadata(metadata)
 
 
 def extract_checkout_url(transaction) -> str | None:

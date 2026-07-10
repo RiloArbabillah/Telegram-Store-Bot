@@ -16,6 +16,7 @@ from utils import (
 from config.settings import settings as app_settings
 from services.payments.common import is_manual_qris_expired
 from services.payments.qris_static import QrisPayloadError, decode_qr_payload_from_image
+from services.payments.qris_messages import cleanup_qris_messages
 
 # Conversation states for product creation
 PRODUCT_NAME, PRODUCT_DESC, PRODUCT_PRICE, PRODUCT_TYPE, PRODUCT_CATEGORY, PRODUCT_SUBCATEGORY, PRODUCT_IMAGE, PRODUCT_DOWNLOAD_LINK, PRODUCT_KEYS, PRODUCT_SUPPORTING_FILES = range(10)
@@ -2320,6 +2321,7 @@ async def manual_qris_nominal_start(update: Update, context: ContextTypes.DEFAUL
         if is_manual_qris_expired(txn):
             txn.status = TransactionStatus.EXPIRED
             session.commit()
+            await cleanup_qris_messages(context.bot, txn.id)
             await query.answer("⏰ QRIS payment has expired.", show_alert=True)
             return ConversationHandler.END
 
@@ -2368,6 +2370,7 @@ async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAUL
         if is_manual_qris_expired(txn):
             txn.status = TransactionStatus.EXPIRED
             session.commit()
+            await cleanup_qris_messages(context.bot, txn.id)
             await update.message.reply_text("⏰ QRIS payment has expired and cannot be confirmed.")
             context.user_data.clear()
             return ConversationHandler.END
@@ -2378,6 +2381,9 @@ async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAUL
 
         user = session.query(User).filter_by(id=txn.user_id).first()
         new_balance = user.wallet_balance if user else 0
+        completed_transaction_id = txn.id
+
+    await cleanup_qris_messages(context.bot, completed_transaction_id)
 
     override_note = ""
     if credited_amount != requested_amount:

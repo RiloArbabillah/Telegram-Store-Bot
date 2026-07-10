@@ -26,6 +26,7 @@ from database.db import get_db_session
 from config.settings import settings
 from services.payments import get_provider
 from services.payments.common import complete_transaction, is_manual_qris_expired, parse_provider_metadata
+from services.payments.qris_messages import cleanup_qris_messages_sync
 from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod, Transaction, TransactionStatus
 from utils import format_price
@@ -71,6 +72,7 @@ def process_provider_webhook(payment_method: PaymentMethod, payload: dict):
 
     print("✅ Payment processed via webhook")
     if result.notification:
+        cleanup_qris_messages_sync(result.notification.transaction_id)
         print(f"   Transaction #{result.notification.transaction_id}")
         print(f"   Amount: {format_price(result.notification.amount)}")
         print(f"   Method: {result.notification.payment_method}")
@@ -382,10 +384,14 @@ def payment_deka_webhook():
                     "auto_confirm_payload": data,
                 },
             )
+            transaction_id = transaction.id
+            credited_amount = int(transaction.confirmed_amount or transaction.amount)
+            session.commit()
+            cleanup_qris_messages_sync(transaction_id)
 
             print(
                 "✅ Manual QRIS auto-confirmed "
-                f"transaction_id={transaction.id}, "
+                f"transaction_id={transaction_id}, "
                 f"received_amount={amount_received}, "
                 f"unique_code={unique_code:03d}"
             )
@@ -396,10 +402,10 @@ def payment_deka_webhook():
 
             return jsonify({
                 'ok': True,
-                'transaction_id': transaction.id,
+                'transaction_id': transaction_id,
                 'received_amount': amount_received,
                 'unique_code': unique_code,
-                'credited_amount': int(transaction.confirmed_amount or transaction.amount),
+                'credited_amount': credited_amount,
             }), 200
 
     except Exception as e:

@@ -1,6 +1,7 @@
 """Main bot entry point for the Telegram Digital Products Store."""
 
 import logging
+import time
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, PreCheckoutQueryHandler
 from config import settings, validate_settings
@@ -31,6 +32,26 @@ async def error_handler(update, context):
         return
 
     logger.exception("Unhandled error while processing update %s", update, exc_info=context.error)
+
+
+def run_polling_with_startup_retry(application):
+    """Keep retrying when Telegram is temporarily unreachable during get_me()."""
+    retry_delay = 5
+    while True:
+        try:
+            application.run_polling(
+                allowed_updates=["message", "callback_query", "pre_checkout_query"],
+                close_loop=False,
+            )
+            return
+        except (TimedOut, NetworkError) as exc:
+            logger.warning(
+                "Telegram startup connection failed: %s. Retrying in %s seconds.",
+                exc,
+                retry_delay,
+            )
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
 
 
 def main():
@@ -575,7 +596,7 @@ def main():
     # Start the bot
     logger.info("Bot started successfully!")
     logger.info("Availability broadcast will run in 10 seconds...")
-    application.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query"])
+    run_polling_with_startup_retry(application)
 
 
 if __name__ == "__main__":

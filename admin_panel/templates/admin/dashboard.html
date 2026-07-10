@@ -1,0 +1,16 @@
+{% extends 'admin/base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>Dashboard</h1><p>Ringkasan aktivitas toko saat ini.</p></div></div>
+<section class="metric-grid" aria-label="Ringkasan toko">
+  <div><span>Pengguna</span><strong>{{ metrics.users }}</strong></div>
+  <div><span>Omzet selesai</span><strong>{{ format_price(metrics.revenue) }}</strong></div>
+  <div><span>Pesanan diproses</span><strong>{{ metrics.pending_orders }}</strong></div>
+  <div><span>Transaksi pending</span><strong>{{ metrics.pending_transactions }}</strong></div>
+  <div><span>Sengketa terbuka</span><strong>{{ metrics.open_disputes }}</strong></div>
+  <div><span>Stok menipis</span><strong>{{ metrics.low_stock }}</strong></div>
+</section>
+<section class="section-block"><div class="section-heading"><h2>Pesanan terbaru</h2><a href="{{ url_for('admin_panel.orders') }}">Lihat semua</a></div>
+  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Pengguna</th><th>Total</th><th>Status</th><th>Waktu</th></tr></thead><tbody>{% for order in recent_orders %}<tr><td>#{{ order.id }}</td><td>@{{ order.user.username or order.user.telegram_id }}</td><td>{{ format_price(order.total_amount) }}</td><td><span class="status">{{ order.status.value }}</span></td><td>{{ order.created_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="5" class="empty">Belum ada pesanan.</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

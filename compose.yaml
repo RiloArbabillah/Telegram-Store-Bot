@@ -28,6 +28,8 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tele_store_bot}:${POSTGRES_PASSWORD:-tele_store_bot_local}@postgres:5432/${POSTGRES_DB:-tele_store_bot}
       WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-https://localhost:3000}
       PORT: 3000
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-local-development-session-secret-change-before-production}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
     depends_on:
       postgres:
         condition: service_healthy

@@ -18,7 +18,7 @@ Telegram bot for selling digital products: · sell software license keys on Tele
 A Telegram bot for selling digital products (software license keys and downloadable files).
 Customers browse a catalog, top up an internal wallet with crypto or a card, and spend that balance on products.
 License keys are automatically delivered from inventory; file products are delivered via download links.
-A full in-Telegram admin panel handles products, categories, stock, orders, disputes, users, broadcasts, and store settings.
+A protected web admin panel and the in-Telegram admin menu handle products, categories, stock, orders, disputes, users, broadcasts, and store settings.
 
 Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (SQLite by default).
 
@@ -57,6 +57,7 @@ Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (
   - **CryptoBot** — pay with any cryptocurrency via [@CryptoBot](https://t.me/CryptoBot)
   - **Card** — native in-Telegram card payments via Telegram Payments
 - 🛠 Full in-Telegram **admin panel**: products, categories, stock/restock, orders, disputes, users (ban/unban), broadcasts, and store settings
+- 🌐 Responsive web admin panel with one-time login links issued only to `ADMIN_TELEGRAM_ID`
 - ⏱ Background jobs for payment verification and periodic availability broadcasts
 
 ## Tech Stack
@@ -199,6 +200,8 @@ Fill in the variables:
 | `BOT_TOKEN` | ✅ | Bot token from [@BotFather](https://t.me/BotFather) (Step 1a). |
 | `ADMIN_TELEGRAM_ID` | ✅ | Your numeric Telegram ID (Step 1b). The only admin account. |
 | `ADMIN_TELEGRAM_USERNAME` | ➖ | Your username without `@` (used in some messages). |
+| `ADMIN_SESSION_SECRET` | ✅ | Random secret of at least 32 characters used to sign the 24-hour web admin session. Generate one with `openssl rand -hex 32`. |
+| `ADMIN_COOKIE_SECURE` | ➖ | Keep `true` on HTTPS deployments. Use `false` only for local HTTP access. |
 | `DATABASE_URL` | ➖ | Defaults to `sqlite:///bot_database.db`. Set a PostgreSQL URL to use Postgres. |
 | `WEBHOOK_BASE_URL` | ➖ | Public HTTPS origin used to display provider callback endpoints, without a path. |
 | `PORT` | ➖ | Webhook HTTP port used by Docker/Gunicorn. Defaults to `3000`. |
@@ -219,7 +222,7 @@ Fill in the variables:
 | `DANA_PUBLIC_KEY_PATH` | ➖ | Path to the DANA public key PEM used for callback signature verification. |
 | `DANA_CALLBACK_URL` | ➖ | The reachable HTTPS callback URL registered in the DANA dashboard. |
 
-> The bot **will not start** until at least `BOT_TOKEN` and `ADMIN_TELEGRAM_ID` are set — it validates these on startup and exits with a clear message if either is missing.
+> The Docker service will not start until `BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `WEBHOOK_BASE_URL`, and a strong `ADMIN_SESSION_SECRET` are configured.
 
 ---
 
@@ -251,9 +254,13 @@ With the bot running:
 
 1. Open Telegram and search for your bot by the username you chose in Step 1a.
 2. Send **`/start`** — you’ll get the welcome message and the main menu (Products, Top Up, Order History, Availability, Support).
-3. Send **`/admin`** — if your Telegram ID matches `ADMIN_TELEGRAM_ID`, the **admin panel** opens (Product Management, User Management, Order Management, Store Settings, Broadcast).
+3. Send **`/admin`** — if your Telegram ID matches `ADMIN_TELEGRAM_ID`, the admin menu opens.
+4. Tap **Buka Panel Web**. The bot sends a private login button that works once and expires after 5 minutes.
+5. The web session remains active for 24 hours. Use **Keluar** on shared devices.
 
 > If `/admin` says access is denied or does nothing, your `ADMIN_TELEGRAM_ID` doesn’t match your account — recheck Step 1b, fix `.env`, and restart the bot.
+
+The web panel is served at `/admin` on the same domain and port as the payment callbacks. Keep `/health` public for container health checks. Do not run more than one polling bot replica because Telegram accepts only one active `getUpdates` consumer per token.
 
 **🎉 That’s it — your bot is live.** A typical first run as admin: open `/admin` → **Product Management** → create a category, then a product, then **Restock Keys** to add inventory. As a user, `/start` → **Top Up** to fund the wallet, then buy a product.
 

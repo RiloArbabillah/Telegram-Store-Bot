@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Masuk | Panel Toko</title>
+  <link rel="stylesheet" href="{{ url_for('admin_panel.static', filename='admin.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-panel">
+    <div class="brand login-brand"><span>TS</span><strong>Tele Store</strong></div>
+    <h1>Panel Admin</h1>
+    {% if login_error %}<p role="alert">Tautan login tidak valid atau sudah kedaluwarsa.</p>{% endif %}
+    <p id="login-status">Buka tautan panel terbaru dari menu admin bot Telegram.</p>
+    <form id="login-form" method="post" action="{{ url_for('admin_panel.create_session') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input id="login-token" type="hidden" name="token">
+      <button class="button primary" type="submit">Verifikasi tautan</button>
+    </form>
+  </main>
+  <script src="{{ url_for('admin_panel.static', filename='login.js') }}" defer></script>
+</body>
+</html>

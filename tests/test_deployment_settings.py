@@ -68,6 +68,26 @@ class DeploymentSettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "WEBHOOK_BASE_URL must use https://"):
             module.validate_settings()
 
+    def test_admin_security_settings_are_loaded(self):
+        settings, _ = self.load_settings(
+            ADMIN_SESSION_SECRET="x" * 32,
+            ADMIN_COOKIE_SECURE="false",
+        )
+
+        self.assertEqual(settings.ADMIN_SESSION_SECRET, "x" * 32)
+        self.assertFalse(settings.ADMIN_COOKIE_SECURE)
+
+    def test_validation_requires_strong_admin_session_secret(self):
+        _, module = self.load_settings(
+            BOT_TOKEN="test-token",
+            ADMIN_TELEGRAM_ID="123",
+            WEBHOOK_BASE_URL="https://bot.example.com",
+            ADMIN_SESSION_SECRET="too-short",
+        )
+
+        with self.assertRaisesRegex(ValueError, "ADMIN_SESSION_SECRET"):
+            module.validate_settings()
+
 
 if __name__ == "__main__":
     unittest.main()

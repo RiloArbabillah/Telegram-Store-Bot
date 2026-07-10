@@ -2,6 +2,7 @@
 
 import os
 from dotenv import load_dotenv
+from public_url import is_public_https_url
 
 # Load environment variables from .env file
 load_dotenv()
@@ -128,8 +129,8 @@ def validate_settings():
     if not settings.DATABASE_URL:
         raise ValueError("DATABASE_URL is required in .env file")
 
-    if settings.WEBHOOK_BASE_URL and not settings.WEBHOOK_BASE_URL.startswith('https://'):
-        raise ValueError("WEBHOOK_BASE_URL must use https://")
+    if settings.WEBHOOK_BASE_URL and not is_public_https_url(settings.WEBHOOK_BASE_URL):
+        raise ValueError("WEBHOOK_BASE_URL must be a public https:// URL")
 
     if len(settings.ADMIN_SESSION_SECRET) < 32:
         raise ValueError("ADMIN_SESSION_SECRET must contain at least 32 characters")

@@ -65,7 +65,18 @@ class DeploymentSettingsTests(unittest.TestCase):
             WEBHOOK_BASE_URL="http://bot.example.com",
         )
 
-        with self.assertRaisesRegex(ValueError, "WEBHOOK_BASE_URL must use https://"):
+        with self.assertRaisesRegex(ValueError, "WEBHOOK_BASE_URL must be a public https:// URL"):
+            module.validate_settings()
+
+    def test_validation_rejects_localhost_webhook_domain(self):
+        _, module = self.load_settings(
+            BOT_TOKEN="test-token",
+            ADMIN_TELEGRAM_ID="123",
+            WEBHOOK_BASE_URL="https://localhost:3000",
+            ADMIN_SESSION_SECRET="x" * 32,
+        )
+
+        with self.assertRaisesRegex(ValueError, "WEBHOOK_BASE_URL must be a public https:// URL"):
             module.validate_settings()
 
     def test_admin_security_settings_are_loaded(self):

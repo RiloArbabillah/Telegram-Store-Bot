@@ -22,6 +22,7 @@ from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from services.payments.common import is_manual_qris_expired
 from services.payments.qris_messages import cleanup_qris_messages
+from public_url import is_public_https_url
 from services.admin_auth import build_login_url, create_login_token
 from telegram.ext import ConversationHandler
 
@@ -84,6 +85,12 @@ async def admin_open_web_panel_callback(update: Update, context: ContextTypes.DE
         return
     if not app_settings.WEBHOOK_BASE_URL:
         await query.answer("Domain panel belum dikonfigurasi.", show_alert=True)
+        return
+    if not is_public_https_url(app_settings.WEBHOOK_BASE_URL):
+        await query.answer(
+            "Domain panel harus memakai URL HTTPS publik, bukan localhost.",
+            show_alert=True,
+        )
         return
 
     with get_db_session() as session:

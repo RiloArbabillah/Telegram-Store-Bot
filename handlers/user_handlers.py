@@ -1,9 +1,19 @@
 """User-facing command and callback handlers."""
 
+import asyncio
+import logging
 import os
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 from database import get_db_session, User, Category, Subcategory, Product, ProductKey, Order, OrderItem, Settings, ProductType, OrderStatus, DisputeStatus
+from services.mailbox import (
+    MailboxError,
+    fetch_mailbox_messages,
+    mask_email,
+    parse_account_credential,
+    summarize_messages,
+)
 from utils import (
     get_or_create_user, format_price, format_datetime, create_main_menu_keyboard,
     create_pagination_keyboard, create_product_detail_keyboard,
@@ -13,6 +23,75 @@ from utils import (
 )
 from config.settings import settings as app_settings
 from handlers.payment_handlers import send_supporting_file
+
+
+logger = logging.getLogger(__name__)
+
+
+def _otp_account_query(session, user_db_id: int):
+    """Return assigned AKUN credentials owned by a user."""
+    return (
+        session.query(ProductKey)
+        .join(Order, ProductKey.order_id == Order.id)
+        .join(Product, ProductKey.product_id == Product.id)
+        .filter(
+            Order.user_id == user_db_id,
+            Order.status == OrderStatus.COMPLETED,
+            Product.product_type == ProductType.AKUN,
+            ProductKey.is_sold.is_(True),
+            ProductKey.order_id.isnot(None),
+        )
+    )
+
+
+def _format_otp_result(mailbox_data: dict) -> str:
+    """Format mailbox response for buyer-facing OTP display."""
+    email = mailbox_data.get("email") or "Unknown email"
+    total = mailbox_data.get("total", 0)
+    count = mailbox_data.get("count", 0)
+    summaries = summarize_messages(mailbox_data, limit=10)
+    summary_text = "\n\n".join(summaries) if summaries else "No recent messages returned."
+    return (
+        "📧 OTP Email\n\n"
+        f"Email: {email}\n"
+        f"Messages checked: {count}/{total}\n\n"
+        f"{summary_text}"
+    )
+
+
+def _single_account_keyboard(product_key_id: int, order_id: int):
+    """Keyboard for an OTP result tied to one purchased account."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"check_email_otp_account_{product_key_id}")],
+        [InlineKeyboardButton("🔙 Back to Order", callback_data=f"check_email_otp_order_{order_id}")],
+        [InlineKeyboardButton("🏠 Home", callback_data="main_menu")],
+    ])
+
+
+async def _safe_answer_callback(query, text: str | None = None) -> None:
+    """Answer callback queries without failing the whole handler on Telegram timeouts."""
+    try:
+        if text:
+            await query.answer(text)
+        else:
+            await query.answer()
+    except (TimedOut, NetworkError) as exc:
+        logger.warning("Telegram callback answer timed out for %s: %s", query.data, exc)
+
+
+async def _safe_edit_message(query, text: str, *, reply_markup=None, retries: int = 2) -> bool:
+    """Edit a callback message with a short retry for transient Telegram network errors."""
+    for attempt in range(retries + 1):
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            return True
+        except (TimedOut, NetworkError) as exc:
+            if attempt >= retries:
+                logger.warning("Telegram message edit failed for %s: %s", query.data, exc)
+                return False
+            await asyncio.sleep(1 + attempt)
+
+    return False
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -531,6 +610,202 @@ async def order_history_callback(update: Update, context: ContextTypes.DEFAULT_T
             "🛍 Your Order History\n\nClick on an order to view details:",
             reply_markup=reply_markup
         )
+
+
+async def check_email_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show completed account orders that can be checked for email OTP."""
+    query = update.callback_query
+    await _safe_answer_callback(query)
+
+    if check_user_banned(update.effective_user.id):
+        await _safe_edit_message(query, "⛔ You have been banned from using this bot.")
+        return
+
+    telegram_id = update.effective_user.id
+
+    with get_db_session() as session:
+        user = session.query(User).filter_by(telegram_id=telegram_id).first()
+        if not user:
+            await _safe_edit_message(query, "❌ User not found.")
+            return
+
+        order_ids = [
+            row[0]
+            for row in (
+                _otp_account_query(session, user.id)
+                .with_entities(ProductKey.order_id)
+                .distinct()
+                .order_by(ProductKey.order_id.desc())
+                .limit(10)
+                .all()
+            )
+        ]
+
+        if not order_ids:
+            await _safe_edit_message(
+                query,
+                "📧 Belum ada akun dari order selesai yang bisa dicek OTP.",
+                reply_markup=create_back_support_keyboard()
+            )
+            return
+
+        orders = (
+            session.query(Order)
+            .filter(Order.id.in_(order_ids))
+            .order_by(Order.created_at.desc())
+            .all()
+        )
+
+        keyboard = []
+        for order in orders:
+            account_count = _otp_account_query(session, user.id).filter(ProductKey.order_id == order.id).count()
+            button_text = f"✅ Order #{order.id} | {account_count} akun | {format_datetime(order.created_at)}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"check_email_otp_order_{order.id}")])
+
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")])
+
+    await _safe_edit_message(
+        query,
+        "📧 Cek OTP Email\n\nPilih order akun yang ingin dicek:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def check_email_otp_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show accounts in an order or fetch directly when only one account exists."""
+    query = update.callback_query
+    await _safe_answer_callback(query)
+
+    if check_user_banned(update.effective_user.id):
+        await _safe_edit_message(query, "⛔ You have been banned from using this bot.")
+        return
+
+    order_id = int(query.data.rsplit("_", 1)[1])
+    telegram_id = update.effective_user.id
+
+    with get_db_session() as session:
+        user = session.query(User).filter_by(telegram_id=telegram_id).first()
+        if not user:
+            await _safe_edit_message(query, "❌ User not found.")
+            return
+
+        order = session.query(Order).filter_by(
+            id=order_id,
+            user_id=user.id,
+            status=OrderStatus.COMPLETED,
+        ).first()
+        if not order:
+            await _safe_edit_message(query, "❌ Order not found.")
+            return
+
+        accounts = (
+            _otp_account_query(session, user.id)
+            .filter(ProductKey.order_id == order.id)
+            .order_by(ProductKey.id.asc())
+            .all()
+        )
+
+        if not accounts:
+            await _safe_edit_message(
+                query,
+                "📧 Order ini tidak memiliki akun yang bisa dicek OTP.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back to Orders", callback_data="check_email_otp")],
+                    [InlineKeyboardButton("🏠 Home", callback_data="main_menu")],
+                ])
+            )
+            return
+
+        if len(accounts) == 1:
+            product_key_id = accounts[0].id
+        else:
+            keyboard = []
+            for index, account in enumerate(accounts, start=1):
+                try:
+                    credential = parse_account_credential(account.key_value)
+                    email_label = mask_email(credential.email)
+                except ValueError:
+                    email_label = "Invalid credential"
+
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"Akun #{index} | {email_label}",
+                        callback_data=f"check_email_otp_account_{account.id}"
+                    )
+                ])
+
+            keyboard.append([InlineKeyboardButton("🔙 Back to Orders", callback_data="check_email_otp")])
+            keyboard.append([InlineKeyboardButton("🏠 Home", callback_data="main_menu")])
+            await _safe_edit_message(
+                query,
+                f"📧 Cek OTP Email\n\nOrder #{order.id} punya {len(accounts)} akun. Pilih akun:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+    await _send_account_otp_result(update, context, product_key_id)
+
+
+async def check_email_otp_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fetch mailbox OTP for a selected purchased account."""
+    query = update.callback_query
+    await _safe_answer_callback(query, "Checking email...")
+
+    if check_user_banned(update.effective_user.id):
+        await _safe_edit_message(query, "⛔ You have been banned from using this bot.")
+        return
+
+    product_key_id = int(query.data.rsplit("_", 1)[1])
+    await _send_account_otp_result(update, context, product_key_id)
+
+
+async def _send_account_otp_result(update: Update, context: ContextTypes.DEFAULT_TYPE, product_key_id: int):
+    """Validate account ownership, fetch mailbox, and render OTP result."""
+    query = update.callback_query
+    telegram_id = update.effective_user.id
+
+    await _safe_edit_message(query, "📧 Checking OTP email, please wait...")
+
+    with get_db_session() as session:
+        user = session.query(User).filter_by(telegram_id=telegram_id).first()
+        if not user:
+            await _safe_edit_message(query, "❌ User not found.")
+            return
+
+        account = _otp_account_query(session, user.id).filter(ProductKey.id == product_key_id).first()
+        if not account:
+            await _safe_edit_message(query, "❌ Account not found.")
+            return
+
+        order_id = account.order_id
+        try:
+            credential = parse_account_credential(account.key_value)
+        except ValueError:
+            await _safe_edit_message(
+                query,
+                "❌ Format akun tidak valid untuk cek OTP. Hubungi support.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back to Order", callback_data=f"check_email_otp_order_{order_id}")],
+                    [InlineKeyboardButton("☎️ Support", callback_data="support")],
+                ])
+            )
+            return
+
+    try:
+        mailbox_data = await asyncio.to_thread(fetch_mailbox_messages, credential.line)
+    except MailboxError as exc:
+        await _safe_edit_message(
+            query,
+            f"❌ Gagal cek email OTP.\n\n{exc}",
+            reply_markup=_single_account_keyboard(product_key_id, order_id)
+        )
+        return
+
+    await _safe_edit_message(
+        query,
+        _format_otp_result(mailbox_data),
+        reply_markup=_single_account_keyboard(product_key_id, order_id)
+    )
 
 
 async def user_order_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -1,6 +1,7 @@
 """Main bot entry point for the Telegram Digital Products Store."""
 
 import logging
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, PreCheckoutQueryHandler
 from config import settings, validate_settings
 from database import init_db
@@ -23,6 +24,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def error_handler(update, context):
+    """Log network errors without noisy tracebacks for transient Telegram timeouts."""
+    if isinstance(context.error, (TimedOut, NetworkError)):
+        logger.warning("Telegram network error while processing update %s: %s", update, context.error)
+        return
+
+    logger.exception("Unhandled error while processing update %s", update, exc_info=context.error)
+
+
 def main():
     """Initialize and start the bot."""
     # Validate configuration
@@ -39,8 +49,21 @@ def main():
         logger.error(f"Database initialization error: {e}")
         return
 
-    # Create application
-    application = Application.builder().token(settings.BOT_TOKEN).build()
+    # Create application with more tolerant Telegram API timeouts.
+    application = (
+        Application.builder()
+        .token(settings.BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .pool_timeout(30)
+        .get_updates_connect_timeout(30)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_pool_timeout(30)
+        .build()
+    )
+    application.add_error_handler(error_handler)
 
     # Register command handlers
     application.add_handler(CommandHandler("start", user_handlers.start_command))
@@ -464,6 +487,9 @@ def main():
     application.add_handler(CallbackQueryHandler(user_handlers.product_callback, pattern="^product_"))
     application.add_handler(CallbackQueryHandler(user_handlers.availability_callback, pattern="^availability$"))
     application.add_handler(CallbackQueryHandler(user_handlers.support_callback, pattern="^support$"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_callback, pattern="^check_email_otp$"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_order_callback, pattern="^check_email_otp_order_"))
+    application.add_handler(CallbackQueryHandler(user_handlers.check_email_otp_account_callback, pattern="^check_email_otp_account_"))
     application.add_handler(CallbackQueryHandler(user_handlers.order_history_callback, pattern="^order_history"))
     application.add_handler(CallbackQueryHandler(user_handlers.user_order_detail_callback, pattern="^user_order_detail_"))
 

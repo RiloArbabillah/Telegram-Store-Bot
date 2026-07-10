@@ -56,6 +56,7 @@ class Settings:
     # Application Settings
     PAYMENT_EXPIRY_HOURS = 0.5  # Payment order expiration time (30 minutes)
     PAYMENT_CHECK_INTERVAL = 30  # Seconds between payment verification checks
+    MAILBOX_SEARCH_KEYWORD = _get_env('MAILBOX_SEARCH_KEYWORD', 'openai') or 'openai'
 
     # DANA QRIS Settings
     DANA_API_MODE = _get_env('DANA_API_MODE', 'disabled').lower()

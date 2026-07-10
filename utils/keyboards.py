@@ -12,6 +12,7 @@ def create_main_menu_keyboard():
             InlineKeyboardButton("💰 Top Up", callback_data="topup"),
             InlineKeyboardButton("Order History", callback_data="order_history")
         ],
+        [InlineKeyboardButton("📧 Cek OTP Email", callback_data="check_email_otp")],
         [
             InlineKeyboardButton("🧮 Availability", callback_data="availability"),
             InlineKeyboardButton("☎️ Support", callback_data="support")

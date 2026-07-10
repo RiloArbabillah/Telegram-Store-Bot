@@ -5,7 +5,7 @@ providers and applies the same normalized transaction finalization flow.
 
 Setup:
 1. Install dependencies: pip install -r requirements.txt
-2. For local testing, use ngrok: ngrok http 5000
+2. For local testing, use ngrok: ngrok http 3000
 3. For CryptoBot webhook:
    - Set webhook URL: https://your-domain.com/webhook/cryptobot
 4. For DANA QRIS callback:
@@ -460,13 +460,13 @@ if __name__ == '__main__':
     print("=" * 60)
     print("Payment Webhook Server")
     print("=" * 60)
-    print(f"Server starting on http://0.0.0.0:5000")
+    print(f"Server starting on http://0.0.0.0:{settings.PORT}")
     print(f"Webhook endpoint: /webhook/cryptobot")
     print(f"Webhook endpoint: /webhook/dana")
     print(f"Webhook endpoint: /webhook/payment-deka")
     print()
     print("For local testing with ngrok:")
-    print("  1. Run: ngrok http 5000")
+    print(f"  1. Run: ngrok http {settings.PORT}")
     print("  2. Copy the HTTPS URL (e.g., https://abc123.ngrok.io)")
     print("  3. Set webhook in CryptoBot to: https://abc123.ngrok.io/webhook/cryptobot")
     print()
@@ -474,4 +474,4 @@ if __name__ == '__main__':
     print("=" * 60)
 
     # Run Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=settings.PORT, debug=False)

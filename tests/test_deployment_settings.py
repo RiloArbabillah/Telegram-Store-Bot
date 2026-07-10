@@ -31,7 +31,7 @@ class DeploymentSettingsTests(unittest.TestCase):
     def test_invalid_port_uses_default(self):
         settings, _ = self.load_settings(PORT="not-a-number")
 
-        self.assertEqual(settings.PORT, 5000)
+        self.assertEqual(settings.PORT, 3000)
 
     def test_callback_url_returns_path_without_public_domain(self):
         settings, _ = self.load_settings(WEBHOOK_BASE_URL="")

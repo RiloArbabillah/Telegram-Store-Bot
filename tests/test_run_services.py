@@ -16,7 +16,7 @@ class RunServicesTests(unittest.TestCase):
         configured = SimpleNamespace(
             DATABASE_URL="sqlite:///bot_database.db",
             WEBHOOK_BASE_URL="https://bot.example.com",
-            PORT=5000,
+            PORT=3000,
         )
 
         with self.assertRaisesRegex(ValueError, "PostgreSQL"):
@@ -26,7 +26,7 @@ class RunServicesTests(unittest.TestCase):
         configured = SimpleNamespace(
             DATABASE_URL="postgresql+psycopg://user:pass@postgres/store",
             WEBHOOK_BASE_URL="",
-            PORT=5000,
+            PORT=3000,
         )
 
         with self.assertRaisesRegex(ValueError, "WEBHOOK_BASE_URL"):
@@ -36,7 +36,7 @@ class RunServicesTests(unittest.TestCase):
         configured = SimpleNamespace(
             DATABASE_URL="postgresql+psycopg://user:pass@postgres/store",
             WEBHOOK_BASE_URL="https://bot.example.com",
-            PORT=5000,
+            PORT=3000,
         )
 
         validate_deployment_settings(configured)

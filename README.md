@@ -201,7 +201,7 @@ Fill in the variables:
 | `ADMIN_TELEGRAM_USERNAME` | ➖ | Your username without `@` (used in some messages). |
 | `DATABASE_URL` | ➖ | Defaults to `sqlite:///bot_database.db`. Set a PostgreSQL URL to use Postgres. |
 | `WEBHOOK_BASE_URL` | ➖ | Public HTTPS origin used to display provider callback endpoints, without a path. |
-| `PORT` | ➖ | Webhook HTTP port used by Docker/Gunicorn. Defaults to `5000`. |
+| `PORT` | ➖ | Webhook HTTP port used by Docker/Gunicorn. Defaults to `3000`. |
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
 | `PAYMENT_CURRENCY` | ➖ | Business currency for the whole app (default `IDR`). All wallet, product, order, and top-up amounts are treated as whole rupiah. |
@@ -304,14 +304,14 @@ ADMIN_TELEGRAM_ID=123456789
 ADMIN_TELEGRAM_USERNAME=your_username
 DATABASE_URL=postgresql+psycopg://tele_store_bot:your_password@postgres:5432/tele_store_bot
 WEBHOOK_BASE_URL=https://bot.example.com
-PORT=5000
+PORT=3000
 ```
 
 Add payment and DANA variables from `.env.example` only when those integrations are used. Environment values are loaded directly; a `.env` file is not copied into the Docker image.
 
 ### 3. Configure domain and health check
 
-Attach your public HTTPS domain to the application and route it to container port `5000` (or the same value configured in `PORT`). Configure Coolify's health check as:
+Attach your public HTTPS domain to the application and route it to container port `3000` (or the same value configured in `PORT`). Configure Coolify's health check as:
 
 ```text
 GET /health
@@ -358,11 +358,11 @@ By default, CryptoBot payments are confirmed by polling every ~30 seconds (no ex
    ```bash
    python3 webhook_server.py
    ```
-   It listens on port **5000**.
+   It listens on port **3000**.
 
 2. Expose it over HTTPS (e.g. with [ngrok](https://ngrok.com/)):
    ```bash
-   ngrok http 5000
+   ngrok http 3000
    ```
 
 3. In [@CryptoBot](https://t.me/CryptoBot) → **Crypto Pay → My Apps → Webhooks**, set the URL to:

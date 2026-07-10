@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=5000
+    PORT=3000
 
 WORKDIR /app
 
@@ -20,9 +20,9 @@ RUN mkdir -p /app/uploads /app/assets/logos /app/assets/products \
 
 USER app
 
-EXPOSE 5000
+EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\", \"5000\")}/health', timeout=3)" || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\", \"3000\")}/health', timeout=3)" || exit 1
 
 CMD ["python", "-m", "deployment.run_services"]

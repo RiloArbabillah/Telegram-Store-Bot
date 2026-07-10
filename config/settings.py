@@ -45,7 +45,7 @@ class Settings:
 
     # Deployment Settings
     WEBHOOK_BASE_URL = _get_env('WEBHOOK_BASE_URL').rstrip('/')
-    PORT = _get_int_env('PORT', 5000) or 5000
+    PORT = _get_int_env('PORT', 3000) or 3000
 
     # Crypto Payment Settings
     CRYPTO_BOT_API_KEY = _get_env('CRYPTO_BOT_API_KEY')

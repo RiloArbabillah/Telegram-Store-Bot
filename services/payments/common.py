@@ -16,7 +16,7 @@ PAYMENT_METHOD_LABELS = {
     PaymentMethod.QRIS: "QRIS",
 }
 
-MANUAL_QRIS_EXPIRY_MINUTES = 5
+MANUAL_QRIS_EXPIRY_MINUTES = 15
 QRIS_MESSAGE_REFS_KEY = "telegram_qris_messages"
 
 
@@ -168,7 +168,7 @@ def update_transaction_provider_fields(
 
 
 def is_manual_qris_expired(transaction, *, now: datetime | None = None) -> bool:
-    """Return True once a manual QRIS transaction is past its 5-minute window."""
+    """Return True once a manual QRIS transaction is past its expiry window."""
     if transaction.payment_method != PaymentMethod.QRIS or transaction.provider_name == "dana_qris":
         return False
 

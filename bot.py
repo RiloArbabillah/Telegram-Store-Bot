@@ -1,6 +1,7 @@
 """Main bot entry point for the Telegram Digital Products Store."""
 
 import logging
+import os
 import time
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, PreCheckoutQueryHandler
@@ -22,6 +23,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -54,6 +56,13 @@ def run_polling_with_startup_retry(application):
             retry_delay = min(retry_delay * 2, 60)
 
 
+def initialize_database_for_process():
+    """Initialize storage unless the container launcher already prepared it."""
+    if os.getenv("DATABASE_INITIALIZED") == "1":
+        return
+    initialize_database()
+
+
 def main():
     """Initialize and start the bot."""
     # Validate configuration
@@ -65,7 +74,7 @@ def main():
 
     # Initialize database
     try:
-        initialize_database()
+        initialize_database_for_process()
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
         return

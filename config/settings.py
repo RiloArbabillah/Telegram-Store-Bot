@@ -32,6 +32,15 @@ def _get_int_env(name: str, default: int = 0) -> int:
         return default
 
 
+def _normalize_database_url(value: str) -> str:
+    """Use the installed psycopg driver for common PostgreSQL URL formats."""
+    if value.startswith('postgres://'):
+        return 'postgresql+psycopg://' + value[len('postgres://'):]
+    if value.startswith('postgresql://'):
+        return 'postgresql+psycopg://' + value[len('postgresql://'):]
+    return value
+
+
 class Settings:
     """Stores all configuration settings for the bot."""
 
@@ -41,7 +50,9 @@ class Settings:
     ADMIN_TELEGRAM_USERNAME = _get_env('ADMIN_TELEGRAM_USERNAME')
 
     # Database Settings
-    DATABASE_URL = _get_env('DATABASE_URL', 'sqlite:///bot_database.db')
+    DATABASE_URL = _normalize_database_url(
+        _get_env('DATABASE_URL', 'sqlite:///bot_database.db')
+    )
 
     # Deployment Settings
     WEBHOOK_BASE_URL = _get_env('WEBHOOK_BASE_URL').rstrip('/')

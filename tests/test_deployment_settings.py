@@ -28,6 +28,26 @@ class DeploymentSettingsTests(unittest.TestCase):
             "https://bot.example.com/webhook/dana",
         )
 
+    def test_normalizes_coolify_postgres_url_for_psycopg(self):
+        settings, _ = self.load_settings(
+            DATABASE_URL="postgres://store:secret@postgres:5432/store?sslmode=require",
+        )
+
+        self.assertEqual(
+            settings.DATABASE_URL,
+            "postgresql+psycopg://store:secret@postgres:5432/store?sslmode=require",
+        )
+
+    def test_normalizes_generic_postgresql_url_for_psycopg(self):
+        settings, _ = self.load_settings(
+            DATABASE_URL="postgresql://store:secret@postgres:5432/store",
+        )
+
+        self.assertEqual(
+            settings.DATABASE_URL,
+            "postgresql+psycopg://store:secret@postgres:5432/store",
+        )
+
     def test_invalid_port_uses_default(self):
         settings, _ = self.load_settings(PORT="not-a-number")
 

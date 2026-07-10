@@ -43,6 +43,10 @@ class Settings:
     # Database Settings
     DATABASE_URL = _get_env('DATABASE_URL', 'sqlite:///bot_database.db')
 
+    # Deployment Settings
+    WEBHOOK_BASE_URL = _get_env('WEBHOOK_BASE_URL').rstrip('/')
+    PORT = _get_int_env('PORT', 5000) or 5000
+
     # Crypto Payment Settings
     CRYPTO_BOT_API_KEY = _get_env('CRYPTO_BOT_API_KEY')
 
@@ -80,6 +84,13 @@ class Settings:
     LOGOS_DIR = os.path.join(ASSETS_DIR, 'logos')
     PRODUCTS_DIR = os.path.join(ASSETS_DIR, 'products')
 
+    def callback_url(self, path: str) -> str:
+        """Build a public callback URL from the configured deployment domain."""
+        normalized_path = '/' + path.lstrip('/')
+        if not self.WEBHOOK_BASE_URL:
+            return normalized_path
+        return f"{self.WEBHOOK_BASE_URL}{normalized_path}"
+
 
 # Create settings instance
 settings = Settings()
@@ -92,6 +103,12 @@ def validate_settings():
 
     if not settings.ADMIN_TELEGRAM_ID:
         raise ValueError("ADMIN_TELEGRAM_ID is required in .env file")
+
+    if not settings.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required in .env file")
+
+    if settings.WEBHOOK_BASE_URL and not settings.WEBHOOK_BASE_URL.startswith('https://'):
+        raise ValueError("WEBHOOK_BASE_URL must use https://")
 
     if settings.DANA_ENABLED:
         missing = [

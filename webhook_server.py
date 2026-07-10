@@ -428,7 +428,10 @@ def health_check():
 @app.route('/', methods=['GET'])
 def index():
     """Root endpoint with setup instructions."""
-    return """
+    cryptobot_url = settings.callback_url('/webhook/cryptobot')
+    dana_url = settings.callback_url('/webhook/dana')
+    payment_deka_url = settings.callback_url('/webhook/payment-deka')
+    return f"""
     <h1>Payment Webhook Receiver</h1>
     <p>This server is running and ready to receive payment provider notifications.</p>
 
@@ -437,15 +440,15 @@ def index():
         <li>Go to <a href="https://t.me/CryptoBot">@CryptoBot</a> in Telegram</li>
         <li>Navigate to: Crypto Pay → My Apps → Select your app</li>
         <li>Tap "Webhooks..." and then "Enable Webhooks"</li>
-        <li>Enter your webhook URL: <code>https://your-domain.com/webhook/cryptobot</code></li>
+        <li>Enter your webhook URL: <code>{cryptobot_url}</code></li>
         <li>Save and start receiving real-time payment notifications!</li>
     </ol>
 
     <h2>Endpoints:</h2>
     <ul>
-        <li><code>POST /webhook/cryptobot</code> - CryptoBot webhook endpoint</li>
-        <li><code>POST /webhook/dana</code> - DANA QRIS callback endpoint</li>
-        <li><code>POST /webhook/payment-deka</code> - Manual QRIS auto-confirm endpoint</li>
+        <li><code>POST {cryptobot_url}</code> - CryptoBot webhook endpoint</li>
+        <li><code>POST {dana_url}</code> - DANA QRIS callback endpoint</li>
+        <li><code>POST {payment_deka_url}</code> - Manual QRIS auto-confirm endpoint</li>
         <li><code>GET /health</code> - Health check</li>
     </ul>
 

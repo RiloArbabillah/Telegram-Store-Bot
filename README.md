@@ -39,11 +39,12 @@ Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (
 9. [Step 5 — Configure environment variables](#step-5--configure-environment-variables)
 10. [Step 6 — Run the bot](#step-6--run-the-bot)
 11. [Step 7 — Use the bot (`/start` and `/admin`)](#step-7--use-the-bot-start-and-admin)
-12. [Optional — Real-time CryptoBot webhooks](#optional--real-time-cryptobot-webhooks)
-13. [Optional — Keep the bot running 24/7](#optional--keep-the-bot-running-247)
-14. [Database notes](#database-notes)
-15. [Troubleshooting](#troubleshooting)
-16. [Security notes](#security-notes)
+12. [Deploy to Coolify with Docker](#deploy-to-coolify-with-docker)
+13. [Optional — Real-time CryptoBot webhooks](#optional--real-time-cryptobot-webhooks)
+14. [Optional — Keep the bot running 24/7](#optional--keep-the-bot-running-247)
+15. [Database notes](#database-notes)
+16. [Troubleshooting](#troubleshooting)
+17. [Security notes](#security-notes)
 
 ---
 
@@ -199,6 +200,8 @@ Fill in the variables:
 | `ADMIN_TELEGRAM_ID` | ✅ | Your numeric Telegram ID (Step 1b). The only admin account. |
 | `ADMIN_TELEGRAM_USERNAME` | ➖ | Your username without `@` (used in some messages). |
 | `DATABASE_URL` | ➖ | Defaults to `sqlite:///bot_database.db`. Set a PostgreSQL URL to use Postgres. |
+| `WEBHOOK_BASE_URL` | ➖ | Public HTTPS origin used to display provider callback endpoints, without a path. |
+| `PORT` | ➖ | Webhook HTTP port used by Docker/Gunicorn. Defaults to `5000`. |
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
 | `PAYMENT_CURRENCY` | ➖ | Business currency for the whole app (default `IDR`). All wallet, product, order, and top-up amounts are treated as whole rupiah. |
@@ -269,6 +272,75 @@ To use DANA QRIS via API + callback:
 5. Restart the bot. When DANA config is complete, the QRIS top-up path switches from manual mode to DANA mode automatically.
 
 If the required DANA values are incomplete or `DANA_API_MODE=disabled`, QRIS automatically falls back to the current manual flow.
+
+---
+
+## Deploy to Coolify with Docker
+
+The included `Dockerfile` runs both long-lived services in one container:
+
+- The Telegram bot receives updates through long polling.
+- Gunicorn exposes the payment webhook server on `PORT`.
+
+### 1. Create PostgreSQL
+
+Create a PostgreSQL resource in the same Coolify project or environment. Use its internal hostname and credentials to build the SQLAlchemy connection URL:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://tele_store_bot:your_password@postgres:5432/tele_store_bot
+```
+
+Replace every value with the credentials and internal hostname shown by Coolify. Do not use `localhost`, because PostgreSQL runs in a different container.
+
+### 2. Create the application
+
+Create a new Coolify application from this repository and select **Dockerfile** as the build pack. The image starts both processes automatically; do not override its start command.
+
+Configure at least these environment variables in Coolify:
+
+```dotenv
+BOT_TOKEN=your_botfather_token
+ADMIN_TELEGRAM_ID=123456789
+ADMIN_TELEGRAM_USERNAME=your_username
+DATABASE_URL=postgresql+psycopg://tele_store_bot:your_password@postgres:5432/tele_store_bot
+WEBHOOK_BASE_URL=https://bot.example.com
+PORT=5000
+```
+
+Add payment and DANA variables from `.env.example` only when those integrations are used. Environment values are loaded directly; a `.env` file is not copied into the Docker image.
+
+### 3. Configure domain and health check
+
+Attach your public HTTPS domain to the application and route it to container port `5000` (or the same value configured in `PORT`). Configure Coolify's health check as:
+
+```text
+GET /health
+```
+
+After deployment, `https://bot.example.com/health` must return JSON with `"status": "ok"`.
+
+### 4. Register provider callbacks
+
+`WEBHOOK_BASE_URL` only constructs callback addresses. The application does not register or modify provider configuration automatically. Register the relevant URLs in each provider dashboard:
+
+```text
+https://bot.example.com/webhook/cryptobot
+https://bot.example.com/webhook/dana
+https://bot.example.com/webhook/payment-deka
+```
+
+When DANA API mode is enabled, set `DANA_CALLBACK_URL` to the full DANA endpoint, for example `https://bot.example.com/webhook/dana`.
+
+### 5. Optional media persistence
+
+Catalog, user, and transaction data are stored in PostgreSQL. If the bot must retain files written locally between redeploys, add Coolify persistent storage for:
+
+```text
+/app/uploads
+/app/assets
+```
+
+Telegram `file_id` values and remote download links stored in PostgreSQL do not need these volumes.
 
 ---
 

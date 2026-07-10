@@ -345,6 +345,51 @@ Telegram `file_id` values and remote download links stored in PostgreSQL do not 
 
 ---
 
+## Run locally with Docker Compose
+
+Docker Compose runs the bot, webhook server, and PostgreSQL together. PostgreSQL is only reachable inside the Compose network; the application is available on port `3000`.
+
+1. Create the local environment file and set at least `BOT_TOKEN` and `ADMIN_TELEGRAM_ID`:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Set a local PostgreSQL password in `.env`:
+
+   ```dotenv
+   POSTGRES_DB=tele_store_bot
+   POSTGRES_USER=tele_store_bot
+   POSTGRES_PASSWORD=replace_with_a_local_password
+   APP_PORT=3000
+   ```
+
+   Compose constructs `DATABASE_URL` from these values automatically.
+
+3. Build and start both containers:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. Check status and health:
+
+   ```bash
+   docker compose ps
+   curl http://localhost:3000/health
+   ```
+
+5. Follow logs or stop the stack:
+
+   ```bash
+   docker compose logs -f app
+   docker compose down
+   ```
+
+Database and local media remain in named Docker volumes. To intentionally delete all local data, run `docker compose down -v`.
+
+---
+
 ## Optional — Real-time CryptoBot webhooks
 
 By default, CryptoBot payments are confirmed by polling every ~30 seconds (no extra setup). For **instant** confirmation, run the included webhook server alongside the bot.

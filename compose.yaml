@@ -1,0 +1,44 @@
+name: tele-store-bot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tele_store_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-tele_store_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tele_store_bot_local}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tele_store_bot}:${POSTGRES_PASSWORD:-tele_store_bot_local}@postgres:5432/${POSTGRES_DB:-tele_store_bot}
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-https://localhost:3000}
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - uploads_data:/app/uploads
+      - assets_data:/app/assets
+
+volumes:
+  postgres_data:
+  uploads_data:
+  assets_data:

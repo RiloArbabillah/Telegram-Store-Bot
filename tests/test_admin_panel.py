@@ -24,7 +24,7 @@ from database.models import (
     TransactionStatus,
     User,
 )
-from services.admin_auth import create_login_token
+from services.admin_auth import create_admin_otp
 
 
 class AdminPanelAuthenticationTests(unittest.TestCase):
@@ -99,14 +99,14 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
         with self.client.session_transaction() as browser_session:
             return browser_session["admin_csrf_token"]
 
-    def issue_token(self, admin_id=123):
+    def issue_otp(self, admin_id=123):
         with self.Session.begin() as session:
-            return create_login_token(session, admin_id)
+            return create_admin_otp(session, admin_id, secret="s" * 32)
 
-    def login(self, raw_token):
+    def login(self, otp):
         return self.client.post(
             "/admin/session",
-            data={"token": raw_token, "csrf_token": self.csrf_token()},
+            data={"otp": otp, "csrf_token": self.csrf_token()},
         )
 
     def authenticate(self):
@@ -126,8 +126,17 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/admin/login"))
 
-    def test_valid_token_creates_admin_session(self):
-        response = self.login(self.issue_token())
+    def test_login_page_renders_otp_form(self):
+        response = self.client.get("/admin/login")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="otp"', body)
+        self.assertIn('maxlength="8"', body)
+        self.assertNotIn("login.js", body)
+
+    def test_valid_otp_creates_admin_session(self):
+        response = self.login(self.issue_otp())
 
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/admin"))
@@ -139,17 +148,17 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("Dashboard", dashboard.get_data(as_text=True))
 
-    def test_replayed_token_is_rejected(self):
-        raw_token = self.issue_token()
-        self.assertEqual(self.login(raw_token).status_code, 302)
+    def test_replayed_otp_is_rejected(self):
+        otp = self.issue_otp()
+        self.assertEqual(self.login(otp).status_code, 302)
         self.client.post("/admin/logout", data={"csrf_token": self.csrf_token()})
 
-        response = self.login(raw_token)
+        response = self.login(otp)
 
         self.assertEqual(response.status_code, 401)
 
     def test_post_without_csrf_is_rejected(self):
-        self.login(self.issue_token())
+        self.login(self.issue_otp())
 
         response = self.client.post("/admin/logout")
 

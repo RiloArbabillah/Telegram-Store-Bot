@@ -272,6 +272,20 @@ class AdminLoginToken(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class AdminOtpCode(Base):
+    """Short-lived, one-time numeric OTP issued to the configured Telegram admin."""
+    __tablename__ = 'admin_otp_codes'
+
+    id = Column(Integer, primary_key=True)
+    code_hash = Column(String(64), nullable=False, index=True)
+    admin_telegram_id = Column(Integer, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class AdminAuditLog(Base):
     """Non-sensitive record of mutations made from an admin surface."""
     __tablename__ = 'admin_audit_logs'

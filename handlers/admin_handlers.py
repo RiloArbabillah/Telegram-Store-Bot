@@ -22,8 +22,7 @@ from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from services.payments.common import is_manual_qris_expired
 from services.payments.qris_messages import cleanup_qris_messages
-from public_url import is_public_https_url
-from services.admin_auth import build_login_url, create_login_token
+from services.admin_auth import create_admin_otp
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
@@ -77,31 +76,24 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def admin_open_web_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Issue a short-lived web-panel login link to the configured admin."""
+    """Issue a short-lived web-panel OTP to the configured admin."""
     query = update.callback_query
     await query.answer()
     if not is_admin(update.effective_user.id):
         await query.answer("⛔ Access denied.", show_alert=True)
         return
-    if not app_settings.WEBHOOK_BASE_URL:
-        await query.answer("Domain panel belum dikonfigurasi.", show_alert=True)
-        return
-    if not is_public_https_url(app_settings.WEBHOOK_BASE_URL):
-        await query.answer(
-            "Domain panel harus memakai URL HTTPS publik, bukan localhost.",
-            show_alert=True,
-        )
-        return
 
     with get_db_session() as session:
-        raw_token = create_login_token(session, update.effective_user.id)
-    login_url = build_login_url(app_settings.WEBHOOK_BASE_URL, raw_token)
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Buka Panel Admin", url=login_url)],
-    ])
+        otp = create_admin_otp(
+            session,
+            update.effective_user.id,
+            secret=app_settings.ADMIN_SESSION_SECRET,
+        )
     await query.message.reply_text(
-        "Tautan panel siap. Tautan ini hanya dapat digunakan sekali dan berlaku selama 5 menit.",
-        reply_markup=markup,
+        "Kode OTP panel admin:\n\n"
+        f"{otp}\n\n"
+        "Buka halaman panel admin di browser, lalu masukkan kode ini. "
+        "Kode hanya dapat digunakan sekali dan berlaku selama 5 menit."
     )
 
 

@@ -255,8 +255,9 @@ With the bot running:
 1. Open Telegram and search for your bot by the username you chose in Step 1a.
 2. Send **`/start`** — you’ll get the welcome message and the main menu (Products, Top Up, Order History, Availability, Support).
 3. Send **`/admin`** — if your Telegram ID matches `ADMIN_TELEGRAM_ID`, the admin menu opens.
-4. Tap **Buka Panel Web**. The bot sends a private login button that works once and expires after 5 minutes.
-5. The web session remains active for 24 hours. Use **Keluar** on shared devices.
+4. Tap **Buat OTP Panel**. The bot sends an 8-digit OTP that works once and expires after 5 minutes.
+5. Open `/admin/login` on your web panel domain, enter the OTP, and submit the form.
+6. The web session remains active for 24 hours. Use **Keluar** on shared devices.
 
 > If `/admin` says access is denied or does nothing, your `ADMIN_TELEGRAM_ID` doesn’t match your account — recheck Step 1b, fix `.env`, and restart the bot.
 

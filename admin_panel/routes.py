@@ -36,7 +36,7 @@ from database.models import (
     TransactionStatus,
     User,
 )
-from services.admin_auth import consume_login_token
+from services.admin_auth import consume_admin_otp
 from services.admin_broadcasts import retry_failed_broadcast
 from services.admin_operations import (
     AdminOperationError,
@@ -151,12 +151,13 @@ def create_admin_blueprint(config, session_provider):
 
     @panel.post("/admin/session")
     def create_session():
-        raw_token = request.form.get("token", "")
+        otp = request.form.get("otp", "")
         with session_provider() as db_session:
-            admin_id = consume_login_token(
+            admin_id = consume_admin_otp(
                 db_session,
-                raw_token,
+                otp,
                 expected_admin_id=config.ADMIN_TELEGRAM_ID,
+                secret=config.ADMIN_SESSION_SECRET,
             )
         if admin_id is None:
             return render_template("admin/login.html", login_error=True), 401

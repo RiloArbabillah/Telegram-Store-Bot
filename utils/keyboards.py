@@ -120,7 +120,7 @@ def create_support_keyboard(support_username, channel_username):
 def create_admin_main_menu_keyboard():
     """Create admin panel main menu keyboard."""
     keyboard = [
-        [InlineKeyboardButton("🌐 Buka Panel Web", callback_data="admin_open_web_panel")],
+        [InlineKeyboardButton("🔑 Buat OTP Panel", callback_data="admin_open_web_panel")],
         [InlineKeyboardButton("📦 Product Management", callback_data="admin_products")],
         [InlineKeyboardButton("👥 User Management", callback_data="admin_users")],
         [InlineKeyboardButton("🛍 Order Management", callback_data="admin_orders")],

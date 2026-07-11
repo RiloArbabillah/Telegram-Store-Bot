@@ -2,6 +2,7 @@
 
 import os
 from dotenv import load_dotenv
+from public_url import is_public_https_url
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,6 +33,22 @@ def _get_int_env(name: str, default: int = 0) -> int:
         return default
 
 
+def _get_bool_env(name: str, default: bool = False) -> bool:
+    value = _get_env(name)
+    if not value:
+        return default
+    return value.lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _normalize_database_url(value: str) -> str:
+    """Use the installed psycopg driver for common PostgreSQL URL formats."""
+    if value.startswith('postgres://'):
+        return 'postgresql+psycopg://' + value[len('postgres://'):]
+    if value.startswith('postgresql://'):
+        return 'postgresql+psycopg://' + value[len('postgresql://'):]
+    return value
+
+
 class Settings:
     """Stores all configuration settings for the bot."""
 
@@ -41,7 +58,15 @@ class Settings:
     ADMIN_TELEGRAM_USERNAME = _get_env('ADMIN_TELEGRAM_USERNAME')
 
     # Database Settings
-    DATABASE_URL = _get_env('DATABASE_URL', 'sqlite:///bot_database.db')
+    DATABASE_URL = _normalize_database_url(
+        _get_env('DATABASE_URL', 'sqlite:///bot_database.db')
+    )
+
+    # Deployment Settings
+    WEBHOOK_BASE_URL = _get_env('WEBHOOK_BASE_URL').rstrip('/')
+    PORT = _get_int_env('PORT', 3000) or 3000
+    ADMIN_SESSION_SECRET = _get_env('ADMIN_SESSION_SECRET')
+    ADMIN_COOKIE_SECURE = _get_bool_env('ADMIN_COOKIE_SECURE', True)
 
     # Crypto Payment Settings
     CRYPTO_BOT_API_KEY = _get_env('CRYPTO_BOT_API_KEY')
@@ -77,8 +102,16 @@ class Settings:
 
     # Asset Storage
     ASSETS_DIR = 'assets'
+    UPLOADS_DIR = 'uploads'
     LOGOS_DIR = os.path.join(ASSETS_DIR, 'logos')
     PRODUCTS_DIR = os.path.join(ASSETS_DIR, 'products')
+
+    def callback_url(self, path: str) -> str:
+        """Build a public callback URL from the configured deployment domain."""
+        normalized_path = '/' + path.lstrip('/')
+        if not self.WEBHOOK_BASE_URL:
+            return normalized_path
+        return f"{self.WEBHOOK_BASE_URL}{normalized_path}"
 
 
 # Create settings instance
@@ -92,6 +125,15 @@ def validate_settings():
 
     if not settings.ADMIN_TELEGRAM_ID:
         raise ValueError("ADMIN_TELEGRAM_ID is required in .env file")
+
+    if not settings.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required in .env file")
+
+    if settings.WEBHOOK_BASE_URL and not is_public_https_url(settings.WEBHOOK_BASE_URL):
+        raise ValueError("WEBHOOK_BASE_URL must be a public https:// URL")
+
+    if len(settings.ADMIN_SESSION_SECRET) < 32:
+        raise ValueError("ADMIN_SESSION_SECRET must contain at least 32 characters")
 
     if settings.DANA_ENABLED:
         missing = [

@@ -5,7 +5,7 @@ providers and applies the same normalized transaction finalization flow.
 
 Setup:
 1. Install dependencies: pip install -r requirements.txt
-2. For local testing, use ngrok: ngrok http 5000
+2. For local testing, use ngrok: ngrok http 3000
 3. For CryptoBot webhook:
    - Set webhook URL: https://your-domain.com/webhook/cryptobot
 4. For DANA QRIS callback:
@@ -15,7 +15,7 @@ Setup:
 5. For production, deploy this on a server with HTTPS
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import hmac
 import hashlib
 import json
@@ -30,8 +30,10 @@ from services.payments.qris_messages import cleanup_qris_messages_sync
 from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod, Transaction, TransactionStatus
 from utils import format_price
+from admin_panel import create_admin_blueprint
 
 app = Flask(__name__)
+app.register_blueprint(create_admin_blueprint(settings, get_db_session))
 
 RUPIAH_AMOUNT_PATTERN = re.compile(r"\bRp\s*([0-9][0-9.\s]*(?:,[0-9]{1,2})?)", re.IGNORECASE)
 
@@ -427,43 +429,21 @@ def health_check():
 
 @app.route('/', methods=['GET'])
 def index():
-    """Root endpoint with setup instructions."""
-    return """
-    <h1>Payment Webhook Receiver</h1>
-    <p>This server is running and ready to receive payment provider notifications.</p>
-
-    <h2>Setup Instructions:</h2>
-    <ol>
-        <li>Go to <a href="https://t.me/CryptoBot">@CryptoBot</a> in Telegram</li>
-        <li>Navigate to: Crypto Pay → My Apps → Select your app</li>
-        <li>Tap "Webhooks..." and then "Enable Webhooks"</li>
-        <li>Enter your webhook URL: <code>https://your-domain.com/webhook/cryptobot</code></li>
-        <li>Save and start receiving real-time payment notifications!</li>
-    </ol>
-
-    <h2>Endpoints:</h2>
-    <ul>
-        <li><code>POST /webhook/cryptobot</code> - CryptoBot webhook endpoint</li>
-        <li><code>POST /webhook/dana</code> - DANA QRIS callback endpoint</li>
-        <li><code>POST /webhook/payment-deka</code> - Manual QRIS auto-confirm endpoint</li>
-        <li><code>GET /health</code> - Health check</li>
-    </ul>
-
-    <p><strong>Note:</strong> For local testing, use ngrok to create a public HTTPS URL.</p>
-    """, 200
+    """Send browser traffic to the protected administration panel."""
+    return redirect('/admin')
 
 
 if __name__ == '__main__':
     print("=" * 60)
     print("Payment Webhook Server")
     print("=" * 60)
-    print(f"Server starting on http://0.0.0.0:5000")
+    print(f"Server starting on http://0.0.0.0:{settings.PORT}")
     print(f"Webhook endpoint: /webhook/cryptobot")
     print(f"Webhook endpoint: /webhook/dana")
     print(f"Webhook endpoint: /webhook/payment-deka")
     print()
     print("For local testing with ngrok:")
-    print("  1. Run: ngrok http 5000")
+    print(f"  1. Run: ngrok http {settings.PORT}")
     print("  2. Copy the HTTPS URL (e.g., https://abc123.ngrok.io)")
     print("  3. Set webhook in CryptoBot to: https://abc123.ngrok.io/webhook/cryptobot")
     print()
@@ -471,4 +451,4 @@ if __name__ == '__main__':
     print("=" * 60)
 
     # Run Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=settings.PORT, debug=False)

@@ -174,9 +174,10 @@ def parse_supporting_files(raw_value: str | None) -> list[dict]:
 
     files = []
     for item in parsed:
-        if isinstance(item, dict) and item.get("file_id"):
+        if isinstance(item, dict) and (item.get("file_id") or item.get("storage_path")):
             files.append({
-                "file_id": str(item["file_id"]),
+                "file_id": str(item.get("file_id") or ""),
+                "storage_path": str(item.get("storage_path") or ""),
                 "file_name": str(item.get("file_name") or "file"),
                 "mime_type": str(item.get("mime_type") or ""),
                 "file_type": str(item.get("file_type") or ""),
@@ -190,10 +191,12 @@ def dump_supporting_files(files: list[dict] | None) -> str | None:
     normalized = []
     for item in files or []:
         file_id = item.get("file_id")
-        if not file_id:
+        storage_path = item.get("storage_path")
+        if not file_id and not storage_path:
             continue
         normalized.append({
-            "file_id": str(file_id),
+            "file_id": str(file_id or ""),
+            "storage_path": str(storage_path or ""),
             "file_name": str(item.get("file_name") or "file"),
             "mime_type": str(item.get("mime_type") or ""),
             "file_type": str(item.get("file_type") or ""),

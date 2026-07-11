@@ -7,3 +7,4 @@ psycopg[binary]==3.2.13
 cryptography==43.0.3
 opencv-python-headless==4.10.0.84
 qrcode[pil]==7.4.2
+gunicorn==22.0.0

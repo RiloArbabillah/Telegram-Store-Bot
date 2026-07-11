@@ -49,19 +49,18 @@ def _is_photo_supporting_file(file_info: dict) -> bool:
 async def send_supporting_file(bot, chat_id: int, file_info: dict) -> bool:
     """Send a supporting file using the Telegram method matching its media type."""
     caption = file_info.get("caption") or file_info.get("file_name") or "Supporting file"
+    source = file_info.get("storage_path") or file_info.get("file_id")
     try:
-        if _is_photo_supporting_file(file_info):
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=file_info["file_id"],
-                caption=caption,
-            )
+        if file_info.get("storage_path"):
+            with open(source, "rb") as local_file:
+                if _is_photo_supporting_file(file_info):
+                    await bot.send_photo(chat_id=chat_id, photo=local_file, caption=caption)
+                else:
+                    await bot.send_document(chat_id=chat_id, document=local_file, caption=caption)
+        elif _is_photo_supporting_file(file_info):
+            await bot.send_photo(chat_id=chat_id, photo=source, caption=caption)
         else:
-            await bot.send_document(
-                chat_id=chat_id,
-                document=file_info["file_id"],
-                caption=caption,
-            )
+            await bot.send_document(chat_id=chat_id, document=source, caption=caption)
         return True
     except Exception as exc:
         print(f"❌ Failed to send supporting file {file_info.get('file_name', 'file')}: {exc}")

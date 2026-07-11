@@ -22,6 +22,7 @@ from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from services.payments.common import is_manual_qris_expired
 from services.payments.qris_messages import cleanup_qris_messages
+from services.admin_auth import create_admin_otp
 from telegram.ext import ConversationHandler
 
 # Conversation states for restock keys
@@ -71,6 +72,28 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(
         "🔐 Admin Panel\n\nSelect an option:",
         reply_markup=create_admin_main_menu_keyboard()
+    )
+
+
+async def admin_open_web_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Issue a short-lived web-panel OTP to the configured admin."""
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(update.effective_user.id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+
+    with get_db_session() as session:
+        otp = create_admin_otp(
+            session,
+            update.effective_user.id,
+            secret=app_settings.ADMIN_SESSION_SECRET,
+        )
+    await query.message.reply_text(
+        "Kode OTP panel admin:\n\n"
+        f"{otp}\n\n"
+        "Buka halaman panel admin di browser, lalu masukkan kode ini. "
+        "Kode hanya dapat digunakan sekali dan berlaku selama 5 menit."
     )
 
 

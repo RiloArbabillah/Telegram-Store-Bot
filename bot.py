@@ -1,6 +1,7 @@
 """Main bot entry point for the Telegram Digital Products Store."""
 
 import logging
+import os
 import time
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, PreCheckoutQueryHandler
@@ -8,6 +9,7 @@ from config import settings, validate_settings
 from database import init_db
 from database.init_data import initialize_database
 from handlers import user_handlers, admin_handlers, payment_handlers, admin_conversations, dispute_handlers
+from services.admin_broadcasts import process_admin_broadcast_queue
 
 # M""M M"""""""`YM M""""""'YMM M"""""`'"""`YM M""""""'YMM MM""""""""`M M""MMMMM""M 
 # M  M M  mmmm.  M M  mmmm. `M M  mm.  mm.  M M  mmmm. `M MM  mmmmmmmM M  MMMMM  M 
@@ -22,6 +24,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -54,6 +57,13 @@ def run_polling_with_startup_retry(application):
             retry_delay = min(retry_delay * 2, 60)
 
 
+def initialize_database_for_process():
+    """Initialize storage unless the container launcher already prepared it."""
+    if os.getenv("DATABASE_INITIALIZED") == "1":
+        return
+    initialize_database()
+
+
 def main():
     """Initialize and start the bot."""
     # Validate configuration
@@ -65,7 +75,7 @@ def main():
 
     # Initialize database
     try:
-        initialize_database()
+        initialize_database_for_process()
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
         return
@@ -549,6 +559,7 @@ def main():
 
     # Admin callback handlers
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_menu_callback, pattern="^admin_menu$"))
+    application.add_handler(CallbackQueryHandler(admin_handlers.admin_open_web_panel_callback, pattern="^admin_open_web_panel$"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_products_callback, pattern="^admin_products"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_restock_keys_callback, pattern="^admin_restock_keys$"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_manage_categories_callback, pattern="^admin_manage_categories$"))
@@ -587,6 +598,7 @@ def main():
         interval=15,
         first=30
     )
+    job_queue.run_repeating(process_admin_broadcast_queue, interval=5, first=5)
 
     # Availability broadcast job - runs every 12 hours (43200 seconds)
     logger.info("Scheduling availability broadcast job (first run in 10 seconds, then every 12 hours)")

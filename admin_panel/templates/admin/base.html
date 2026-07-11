@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Panel Admin{% endblock %} | Tele Store</title>
+  <link rel="stylesheet" href="{{ url_for('admin_panel.static', filename='admin.css') }}">
+</head>
+<body>
+  <input class="nav-toggle" type="checkbox" id="nav-toggle">
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('admin_panel.dashboard') }}"><span>TS</span><strong>Tele Store</strong></a>
+    <nav aria-label="Navigasi utama">
+      {% set links = [('dashboard','admin_panel.dashboard','Dashboard'),('products','admin_panel.products','Produk & Stok'),('categories','admin_panel.categories','Kategori'),('users','admin_panel.users','Pengguna'),('orders','admin_panel.orders','Pesanan'),('transactions','admin_panel.transactions','Transaksi'),('disputes','admin_panel.disputes','Sengketa'),('settings','admin_panel.store_settings','Pengaturan'),('broadcasts','admin_panel.broadcasts','Broadcast'),('audit','admin_panel.audit','Audit')] %}
+      {% for key, endpoint, label in links %}<a class="{{ 'active' if active_page == key else '' }}" href="{{ url_for(endpoint) }}">{{ label }}</a>{% endfor %}
+    </nav>
+  </aside>
+  <label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
+  <div class="app-shell">
+    <header class="topbar">
+      <label class="menu-button" for="nav-toggle" aria-label="Buka navigasi">Menu</label>
+      <div class="admin-identity"><span>{{ admin_username }}</span><form method="post" action="{{ url_for('admin_panel.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button ghost" type="submit">Keluar</button></form></div>
+    </header>
+    <main class="content">
+      {% for category, message in get_flashed_messages(with_categories=true) %}<div class="notice {{ category }}" role="status">{{ message }}</div>{% endfor %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ url_for('admin_panel.static', filename='admin.js') }}" defer></script>
+</body>
+</html>

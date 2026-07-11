@@ -18,7 +18,7 @@ Telegram bot for selling digital products: · sell software license keys on Tele
 A Telegram bot for selling digital products (software license keys and downloadable files).
 Customers browse a catalog, top up an internal wallet with crypto or a card, and spend that balance on products.
 License keys are automatically delivered from inventory; file products are delivered via download links.
-A full in-Telegram admin panel handles products, categories, stock, orders, disputes, users, broadcasts, and store settings.
+A protected web admin panel and the in-Telegram admin menu handle products, categories, stock, orders, disputes, users, broadcasts, and store settings.
 
 Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (SQLite by default).
 
@@ -39,11 +39,12 @@ Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (
 9. [Step 5 — Configure environment variables](#step-5--configure-environment-variables)
 10. [Step 6 — Run the bot](#step-6--run-the-bot)
 11. [Step 7 — Use the bot (`/start` and `/admin`)](#step-7--use-the-bot-start-and-admin)
-12. [Optional — Real-time CryptoBot webhooks](#optional--real-time-cryptobot-webhooks)
-13. [Optional — Keep the bot running 24/7](#optional--keep-the-bot-running-247)
-14. [Database notes](#database-notes)
-15. [Troubleshooting](#troubleshooting)
-16. [Security notes](#security-notes)
+12. [Deploy to Coolify with Docker](#deploy-to-coolify-with-docker)
+13. [Optional — Real-time CryptoBot webhooks](#optional--real-time-cryptobot-webhooks)
+14. [Optional — Keep the bot running 24/7](#optional--keep-the-bot-running-247)
+15. [Database notes](#database-notes)
+16. [Troubleshooting](#troubleshooting)
+17. [Security notes](#security-notes)
 
 ---
 
@@ -56,6 +57,7 @@ Built with **Python**, **python-telegram-bot v20** (async), and **SQLAlchemy** (
   - **CryptoBot** — pay with any cryptocurrency via [@CryptoBot](https://t.me/CryptoBot)
   - **Card** — native in-Telegram card payments via Telegram Payments
 - 🛠 Full in-Telegram **admin panel**: products, categories, stock/restock, orders, disputes, users (ban/unban), broadcasts, and store settings
+- 🌐 Responsive web admin panel with one-time login links issued only to `ADMIN_TELEGRAM_ID`
 - ⏱ Background jobs for payment verification and periodic availability broadcasts
 
 ## Tech Stack
@@ -198,7 +200,11 @@ Fill in the variables:
 | `BOT_TOKEN` | ✅ | Bot token from [@BotFather](https://t.me/BotFather) (Step 1a). |
 | `ADMIN_TELEGRAM_ID` | ✅ | Your numeric Telegram ID (Step 1b). The only admin account. |
 | `ADMIN_TELEGRAM_USERNAME` | ➖ | Your username without `@` (used in some messages). |
+| `ADMIN_SESSION_SECRET` | ✅ | Random secret of at least 32 characters used to sign the 24-hour web admin session. Generate one with `openssl rand -hex 32`. |
+| `ADMIN_COOKIE_SECURE` | ➖ | Keep `true` on HTTPS deployments. Use `false` only for local HTTP access. |
 | `DATABASE_URL` | ➖ | Defaults to `sqlite:///bot_database.db`. Set a PostgreSQL URL to use Postgres. |
+| `WEBHOOK_BASE_URL` | ➖ | Public HTTPS origin used to display provider callback endpoints, without a path. |
+| `PORT` | ➖ | Webhook HTTP port used by Docker/Gunicorn. Defaults to `3000`. |
 | `CRYPTO_BOT_API_KEY` | ➖ | CryptoBot Crypto Pay token (Step 1c). Blank disables crypto top-up. |
 | `TELEGRAM_PROVIDER_TOKEN` | ➖ | Telegram Payments provider token (Step 1d). Blank disables card top-up. |
 | `PAYMENT_CURRENCY` | ➖ | Business currency for the whole app (default `IDR`). All wallet, product, order, and top-up amounts are treated as whole rupiah. |
@@ -216,7 +222,7 @@ Fill in the variables:
 | `DANA_PUBLIC_KEY_PATH` | ➖ | Path to the DANA public key PEM used for callback signature verification. |
 | `DANA_CALLBACK_URL` | ➖ | The reachable HTTPS callback URL registered in the DANA dashboard. |
 
-> The bot **will not start** until at least `BOT_TOKEN` and `ADMIN_TELEGRAM_ID` are set — it validates these on startup and exits with a clear message if either is missing.
+> The Docker service will not start until `BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `WEBHOOK_BASE_URL`, and a strong `ADMIN_SESSION_SECRET` are configured.
 
 ---
 
@@ -248,9 +254,14 @@ With the bot running:
 
 1. Open Telegram and search for your bot by the username you chose in Step 1a.
 2. Send **`/start`** — you’ll get the welcome message and the main menu (Products, Top Up, Order History, Availability, Support).
-3. Send **`/admin`** — if your Telegram ID matches `ADMIN_TELEGRAM_ID`, the **admin panel** opens (Product Management, User Management, Order Management, Store Settings, Broadcast).
+3. Send **`/admin`** — if your Telegram ID matches `ADMIN_TELEGRAM_ID`, the admin menu opens.
+4. Tap **Buat OTP Panel**. The bot sends an 8-digit OTP that works once and expires after 5 minutes.
+5. Open `/admin/login` on your web panel domain, enter the OTP, and submit the form.
+6. The web session remains active for 24 hours. Use **Keluar** on shared devices.
 
 > If `/admin` says access is denied or does nothing, your `ADMIN_TELEGRAM_ID` doesn’t match your account — recheck Step 1b, fix `.env`, and restart the bot.
+
+The web panel is served at `/admin` on the same domain and port as the payment callbacks. Keep `/health` public for container health checks. Do not run more than one polling bot replica because Telegram accepts only one active `getUpdates` consumer per token.
 
 **🎉 That’s it — your bot is live.** A typical first run as admin: open `/admin` → **Product Management** → create a category, then a product, then **Restock Keys** to add inventory. As a user, `/start` → **Top Up** to fund the wallet, then buy a product.
 
@@ -272,6 +283,121 @@ If the required DANA values are incomplete or `DANA_API_MODE=disabled`, QRIS aut
 
 ---
 
+## Deploy to Coolify with Docker
+
+The included `Dockerfile` runs both long-lived services in one container:
+
+- The Telegram bot receives updates through long polling.
+- Gunicorn exposes the payment webhook server on `PORT`.
+
+### 1. Create PostgreSQL
+
+Create a PostgreSQL resource in the same Coolify project or environment. Use its internal hostname and credentials to build the SQLAlchemy connection URL:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://tele_store_bot:your_password@postgres:5432/tele_store_bot
+```
+
+Replace every value with the credentials and internal hostname shown by Coolify. Do not use `localhost`, because PostgreSQL runs in a different container.
+URLs generated by Coolify with a `postgres://` or `postgresql://` prefix are normalized automatically to the installed `psycopg` driver.
+
+### 2. Create the application
+
+Create a new Coolify application from this repository and select **Dockerfile** as the build pack. The image starts both processes automatically; do not override its start command.
+
+Configure at least these environment variables in Coolify:
+
+```dotenv
+BOT_TOKEN=your_botfather_token
+ADMIN_TELEGRAM_ID=123456789
+ADMIN_TELEGRAM_USERNAME=your_username
+DATABASE_URL=postgresql+psycopg://tele_store_bot:your_password@postgres:5432/tele_store_bot
+WEBHOOK_BASE_URL=https://bot.example.com
+PORT=3000
+```
+
+Add payment and DANA variables from `.env.example` only when those integrations are used. Environment values are loaded directly; a `.env` file is not copied into the Docker image.
+
+### 3. Configure domain and health check
+
+Attach your public HTTPS domain to the application and route it to container port `3000` (or the same value configured in `PORT`). Configure Coolify's health check as:
+
+```text
+GET /health
+```
+
+After deployment, `https://bot.example.com/health` must return JSON with `"status": "ok"`.
+
+### 4. Register provider callbacks
+
+`WEBHOOK_BASE_URL` only constructs callback addresses. The application does not register or modify provider configuration automatically. Register the relevant URLs in each provider dashboard:
+
+```text
+https://bot.example.com/webhook/cryptobot
+https://bot.example.com/webhook/dana
+https://bot.example.com/webhook/payment-deka
+```
+
+When DANA API mode is enabled, set `DANA_CALLBACK_URL` to the full DANA endpoint, for example `https://bot.example.com/webhook/dana`.
+
+### 5. Optional media persistence
+
+Catalog, user, and transaction data are stored in PostgreSQL. If the bot must retain files written locally between redeploys, add Coolify persistent storage for:
+
+```text
+/app/uploads
+/app/assets
+```
+
+Telegram `file_id` values and remote download links stored in PostgreSQL do not need these volumes.
+
+---
+
+## Run locally with Docker Compose
+
+Docker Compose runs the bot, webhook server, and PostgreSQL together. PostgreSQL is only reachable inside the Compose network; the application is available on port `3000`.
+
+1. Create the local environment file and set at least `BOT_TOKEN` and `ADMIN_TELEGRAM_ID`:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Set a local PostgreSQL password in `.env`:
+
+   ```dotenv
+   POSTGRES_DB=tele_store_bot
+   POSTGRES_USER=tele_store_bot
+   POSTGRES_PASSWORD=replace_with_a_local_password
+   APP_PORT=3000
+   ```
+
+   Compose constructs `DATABASE_URL` from these values automatically.
+
+3. Build and start both containers:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. Check status and health:
+
+   ```bash
+   docker compose ps
+   curl http://localhost:3000/health
+   ```
+
+5. Follow logs or stop the stack:
+
+   ```bash
+   docker compose logs -f app
+   docker compose down
+   ```
+
+Database and local media remain in named Docker volumes. To intentionally delete all local data, run `docker compose down -v`.
+
+---
+
 ## Optional — Real-time CryptoBot webhooks
 
 By default, CryptoBot payments are confirmed by polling every ~30 seconds (no extra setup). For **instant** confirmation, run the included webhook server alongside the bot.
@@ -286,11 +412,11 @@ By default, CryptoBot payments are confirmed by polling every ~30 seconds (no ex
    ```bash
    python3 webhook_server.py
    ```
-   It listens on port **5000**.
+   It listens on port **3000**.
 
 2. Expose it over HTTPS (e.g. with [ngrok](https://ngrok.com/)):
    ```bash
-   ngrok http 5000
+   ngrok http 3000
    ```
 
 3. In [@CryptoBot](https://t.me/CryptoBot) → **Crypto Pay → My Apps → Webhooks**, set the URL to:

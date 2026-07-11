@@ -192,6 +192,22 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
 
+    def test_products_and_categories_use_dialog_modals_for_row_forms(self):
+        self.authenticate()
+
+        products = self.client.get("/admin/products").get_data(as_text=True)
+        categories = self.client.get("/admin/categories").get_data(as_text=True)
+
+        for body, trigger, heading in (
+            (products, 'data-dialog-open="restock-product-', "Restock Produk"),
+            (categories, 'data-dialog-open="edit-category-', "Edit Kategori"),
+        ):
+            with self.subTest(heading=heading):
+                self.assertIn(trigger, body)
+                self.assertIn('<dialog class="admin-modal"', body)
+                self.assertIn(heading, body)
+                self.assertNotIn('class="popover"', body)
+
     def test_product_create_restock_user_ban_settings_and_broadcast(self):
         self.authenticate()
         with self.Session() as session:

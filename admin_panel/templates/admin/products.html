@@ -1,5 +1,85 @@
-{% extends 'admin/base.html' %}{% block title %}Produk & Stok{% endblock %}{% block content %}
-<div class="page-heading"><div><h1>Produk & Stok</h1><p>{{ data.total }} produk tersimpan.</p></div><a class="button primary" href="{{ url_for('admin_panel.product_new') }}">Tambah produk</a></div>
-<form class="toolbar" method="get"><input name="q" value="{{ search }}" placeholder="Cari nama produk"><button class="button" type="submit">Cari</button></form>
-<div class="table-wrap"><table><thead><tr><th>Produk</th><th>Tipe</th><th>Harga</th><th>Stok</th><th>Status</th><th>Aksi</th></tr></thead><tbody>{% for product in data.rows %}<tr><td><strong>{{ product.name }}</strong><small>{{ product.category.name if product.category else 'Tanpa kategori' }}</small></td><td>{{ product.product_type.value|upper }}</td><td>{{ format_price(product.price) }}</td><td><a class="table-link" href="{{ url_for('admin_panel.product_stock', product_id=product.id) }}">{{ product.stock_count }}</a></td><td><span class="status {{ 'success' if product.is_active else 'muted' }}">{{ 'Aktif' if product.is_active else 'Nonaktif' }}</span></td><td class="actions"><a class="button ghost" href="{{ url_for('admin_panel.product_edit', product_id=product.id) }}">Edit</a><details><summary class="button ghost">Restock</summary><form class="popover" method="post" enctype="multipart/form-data" action="{{ url_for('admin_panel.product_restock', product_id=product.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Item, satu per baris<textarea name="items" required></textarea></label><label>File pelengkap akun<input type="file" name="supporting_file"></label><button class="button primary" type="submit">Tambahkan</button></form></details></td></tr>{% else %}<tr><td colspan="6" class="empty">Produk tidak ditemukan.</td></tr>{% endfor %}</tbody></table></div>{% include 'admin/_pagination.html' %}
+{% extends 'admin/base.html' %}
+{% block title %}Produk & Stok{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>Produk & Stok</h1>
+    <p>{{ data.total }} produk tersimpan.</p>
+  </div>
+  <a class="button primary" href="{{ url_for('admin_panel.product_new') }}">Tambah produk</a>
+</div>
+<form class="toolbar" method="get">
+  <input name="q" value="{{ search }}" placeholder="Cari nama produk">
+  <button class="button" type="submit">Cari</button>
+</form>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Produk</th>
+        <th>Tipe</th>
+        <th>Harga</th>
+        <th>Stok</th>
+        <th>Status</th>
+        <th>Aksi</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for product in data.rows %}
+      <tr>
+        <td>
+          <strong>{{ product.name }}</strong>
+          <small>{{ product.category.name if product.category else 'Tanpa kategori' }}</small>
+        </td>
+        <td>{{ product.product_type.value|upper }}</td>
+        <td>{{ format_price(product.price) }}</td>
+        <td><a class="table-link" href="{{ url_for('admin_panel.product_stock', product_id=product.id) }}">{{ product.stock_count }}</a></td>
+        <td><span class="status {{ 'success' if product.is_active else 'muted' }}">{{ 'Aktif' if product.is_active else 'Nonaktif' }}</span></td>
+        <td class="actions">
+          <a class="button ghost" href="{{ url_for('admin_panel.product_edit', product_id=product.id) }}">Edit</a>
+          <button class="button ghost" type="button" data-dialog-open="restock-product-{{ product.id }}">Restock</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">Produk tidak ditemukan.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include 'admin/_pagination.html' %}
+
+{% for product in data.rows %}
+<dialog class="admin-modal" id="restock-product-{{ product.id }}">
+  <form class="modal-form" method="post" enctype="multipart/form-data" action="{{ url_for('admin_panel.product_restock', product_id=product.id) }}">
+    <div class="modal-heading">
+      <div>
+        <h2>Restock Produk</h2>
+        <p>{{ product.name }}</p>
+      </div>
+      <button class="button ghost" type="button" data-dialog-close>Tutup</button>
+    </div>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>
+      {{ 'Credential akun' if product.product_type.value == 'akun' else 'Item, satu per baris' }}
+      <textarea name="items" required></textarea>
+      <span class="helper">
+        {% if product.product_type.value == 'akun' %}
+        AKUN hanya menerima 1 credential per submit, sama seperti bot.
+        {% else %}
+        KEY menerima banyak item, satu item per baris.
+        {% endif %}
+      </span>
+    </label>
+    <label>
+      File pelengkap akun
+      <input type="file" name="supporting_file" accept=".txt,.pdf,.csv,.json,.zip,image/png,image/jpeg,image/webp">
+      <span class="helper">Opsional untuk AKUN. Maksimal 20 MB.</span>
+    </label>
+    <div class="modal-actions">
+      <button class="button ghost" type="button" data-dialog-close>Batal</button>
+      <button class="button primary" type="submit">Tambahkan</button>
+    </div>
+  </form>
+</dialog>
+{% endfor %}
 {% endblock %}

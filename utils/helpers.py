@@ -92,24 +92,24 @@ def validate_amount(amount_str: str) -> tuple[bool, int, str]:
 def get_effective_product_stock(product, session=None) -> int:
     """Return effective available stock for a product.
 
-    For AKUN products, counts unsold ProductKey rows rather than trusting
-    the cached stock_count field.  For all other product types the cached
-    stock_count is returned as-is.
+    For KEY and AKUN products, counts ProductKey rows that are neither sold
+    nor reserved by a pending order. For FILE products the cached stock_count
+    field is returned as-is.
     """
-    if product.product_type != ProductType.AKUN:
+    if product.product_type not in {ProductType.KEY, ProductType.AKUN}:
         return int(product.stock_count or 0)
 
     if session is None:
         with get_db_session() as owned_session:
             return int(
                 owned_session.query(ProductKey)
-                .filter_by(product_id=product.id, is_sold=False)
+                .filter_by(product_id=product.id, is_sold=False, order_id=None)
                 .count()
             )
 
     return int(
         session.query(ProductKey)
-        .filter_by(product_id=product.id, is_sold=False)
+        .filter_by(product_id=product.id, is_sold=False, order_id=None)
         .count()
     )
 

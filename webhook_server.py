@@ -15,7 +15,7 @@ Setup:
 5. For production, deploy this on a server with HTTPS
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import hmac
 import hashlib
 import json
@@ -30,8 +30,10 @@ from services.payments.qris_messages import cleanup_qris_messages_sync
 from services.payments.dana_client import verify_callback_signature
 from database import PaymentMethod, Transaction, TransactionStatus
 from utils import format_price
+from admin_panel import create_admin_blueprint
 
 app = Flask(__name__)
+app.register_blueprint(create_admin_blueprint(settings, get_db_session))
 
 RUPIAH_AMOUNT_PATTERN = re.compile(r"\bRp\s*([0-9][0-9.\s]*(?:,[0-9]{1,2})?)", re.IGNORECASE)
 
@@ -82,11 +84,13 @@ def process_provider_webhook(payment_method: PaymentMethod, payload: dict):
 
 def build_payment_notification_messages(notification):
     """Build Telegram messages for a completed payment notification."""
+    order_line = f"\n📝 Order ID: #{notification.order_id}" if notification.order_id else ""
+    details = f"\n\n{notification.order_details}" if notification.order_details else ""
     user_message = f"""✅ Payment Confirmed!
 
 💳 Method: {notification.payment_method}
-💰 Amount: {format_price(notification.amount)}
-🔄 Your new wallet balance: {format_price(notification.new_balance)}
+💰 Amount: {format_price(notification.amount)}{order_line}
+{details}
 
 Thank you for your payment!"""
 
@@ -95,6 +99,7 @@ Thank you for your payment!"""
 👤 User ID: {notification.user_telegram_id}
 💰 Amount: {format_price(notification.amount)}
 📝 Transaction ID: #{notification.transaction_id}
+{f"🛍 Order ID: #{notification.order_id}" if notification.order_id else ""}
 🔄 Payment Method: {notification.payment_method}"""
 
     return user_message, admin_message
@@ -397,7 +402,6 @@ def payment_deka_webhook():
             )
             if notification:
                 print(f"   Credited: {format_price(notification.amount)}")
-                print(f"   New balance: {format_price(notification.new_balance)}")
                 send_payment_notifications(notification)
 
             return jsonify({
@@ -427,33 +431,8 @@ def health_check():
 
 @app.route('/', methods=['GET'])
 def index():
-    """Root endpoint with setup instructions."""
-    cryptobot_url = settings.callback_url('/webhook/cryptobot')
-    dana_url = settings.callback_url('/webhook/dana')
-    payment_deka_url = settings.callback_url('/webhook/payment-deka')
-    return f"""
-    <h1>Payment Webhook Receiver</h1>
-    <p>This server is running and ready to receive payment provider notifications.</p>
-
-    <h2>Setup Instructions:</h2>
-    <ol>
-        <li>Go to <a href="https://t.me/CryptoBot">@CryptoBot</a> in Telegram</li>
-        <li>Navigate to: Crypto Pay → My Apps → Select your app</li>
-        <li>Tap "Webhooks..." and then "Enable Webhooks"</li>
-        <li>Enter your webhook URL: <code>{cryptobot_url}</code></li>
-        <li>Save and start receiving real-time payment notifications!</li>
-    </ol>
-
-    <h2>Endpoints:</h2>
-    <ul>
-        <li><code>POST {cryptobot_url}</code> - CryptoBot webhook endpoint</li>
-        <li><code>POST {dana_url}</code> - DANA QRIS callback endpoint</li>
-        <li><code>POST {payment_deka_url}</code> - Manual QRIS auto-confirm endpoint</li>
-        <li><code>GET /health</code> - Health check</li>
-    </ul>
-
-    <p><strong>Note:</strong> For local testing, use ngrok to create a public HTTPS URL.</p>
-    """, 200
+    """Send browser traffic to the protected administration panel."""
+    return redirect('/admin')
 
 
 if __name__ == '__main__':

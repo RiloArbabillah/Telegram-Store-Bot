@@ -1,0 +1,1 @@
+{% if data.pages > 1 %}<nav class="pagination" aria-label="Pagination"><span>Halaman {{ data.page }} dari {{ data.pages }}</span><div>{% if data.page > 1 %}<a class="button ghost" href="?page={{ data.page - 1 }}">Sebelumnya</a>{% endif %}{% if data.page < data.pages %}<a class="button ghost" href="?page={{ data.page + 1 }}">Berikutnya</a>{% endif %}</div></nav>{% endif %}

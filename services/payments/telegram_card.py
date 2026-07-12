@@ -21,7 +21,7 @@ class TelegramCardProvider(PaymentProvider):
     def create_payment(self, session, user, amount: float):
         if not self.is_available():
             raise PaymentCreationError(
-                "❌ Card payments are disabled for the current IDR wallet setup.\n\nPlease choose QRIS instead."
+                "❌ Card payments are disabled for the current IDR checkout setup.\n\nPlease choose QRIS instead."
             )
 
         transaction = Transaction(
@@ -35,7 +35,7 @@ class TelegramCardProvider(PaymentProvider):
         session.commit()
         session.refresh(transaction)
 
-        payload = f"topup_{transaction.id}"
+        payload = f"payment_{transaction.id}"
         update_transaction_provider_fields(
             transaction,
             provider_name=self.provider_name,
@@ -52,13 +52,13 @@ class TelegramCardProvider(PaymentProvider):
 
 Please complete the secure card payment below 👇""",
             invoice_request={
-                "title": "Wallet Top-up",
-                "description": f"Add {format_price(amount)} to your wallet balance.",
+                "title": "Order Payment",
+                "description": f"Pay {format_price(amount)}.",
                 "payload": payload,
                 "provider_token": app_settings.TELEGRAM_PROVIDER_TOKEN,
                 "currency": app_settings.PAYMENT_CURRENCY,
-                "prices": [("Wallet Top-up", int(round(amount * 100)))],
-                "start_parameter": f"topup-{transaction.id}",
+                "prices": [("Order Payment", int(round(amount * 100)))],
+                "start_parameter": f"payment-{transaction.id}",
             },
         )
 
@@ -84,7 +84,7 @@ Please complete the secure card payment below 👇""",
         )
 
     def _get_transaction_by_payload(self, session, payload: str):
-        if not payload.startswith("topup_"):
+        if not payload.startswith("payment_"):
             return None
 
         try:

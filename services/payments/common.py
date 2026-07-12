@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from database import PaymentMethod, TransactionStatus, User
+from database import PaymentMethod, TransactionStatus
+from services.direct_checkout import finalize_paid_checkout
 
 from .base import PaymentNotification
 
@@ -193,7 +194,7 @@ def complete_transaction(
     qr_payload: str | None = None,
     provider_metadata: dict | None = None,
 ) -> PaymentNotification | None:
-    """Mark a transaction complete exactly once and credit the user wallet."""
+    """Mark a transaction complete exactly once and finalize the linked order."""
     hydrate_legacy_transaction(transaction)
 
     if transaction.status == TransactionStatus.COMPLETED:
@@ -208,25 +209,35 @@ def complete_transaction(
         provider_metadata=provider_metadata,
     )
 
+    if credited_amount is not None:
+        transaction.confirmed_amount = int(credited_amount)
+
+    if transaction.order_id:
+        delivery = finalize_paid_checkout(session, transaction.id)
+        if not delivery:
+            return None
+        return PaymentNotification(
+            user_telegram_id=delivery.user_telegram_id,
+            amount=delivery.amount,
+            transaction_id=transaction.id,
+            payment_method=payment_method_label(transaction.payment_method),
+            provider_name=transaction.provider_name,
+            order_id=delivery.order_id,
+            order_details=delivery.order_details,
+            supporting_files=delivery.supporting_files,
+        )
+
     effective_amount = credited_amount if credited_amount is not None else transaction.confirmed_amount
     if effective_amount is None:
         effective_amount = transaction.amount
     effective_amount = int(effective_amount)
     transaction.confirmed_amount = effective_amount
-
     transaction.status = TransactionStatus.COMPLETED
     transaction.completed_at = datetime.utcnow()
 
-    user = session.query(User).filter_by(id=transaction.user_id).first()
-    if not user:
-        return None
-
-    user.wallet_balance += effective_amount
-
     return PaymentNotification(
-        user_telegram_id=user.telegram_id,
+        user_telegram_id=transaction.user.telegram_id,
         amount=effective_amount,
-        new_balance=user.wallet_balance,
         transaction_id=transaction.id,
         payment_method=payment_method_label(transaction.payment_method),
         provider_name=transaction.provider_name,

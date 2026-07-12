@@ -2379,15 +2379,14 @@ async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAUL
         notification = complete_transaction(session, txn, credited_amount=credited_amount)
         session.commit()
 
-        user = session.query(User).filter_by(id=txn.user_id).first()
-        new_balance = user.wallet_balance if user else 0
         completed_transaction_id = txn.id
 
     await cleanup_qris_messages(context.bot, completed_transaction_id)
 
     override_note = ""
     if credited_amount != requested_amount:
-        override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
+        override_note = f"\n🧾 Requested Amount: {format_price(requested_amount)}"
+    order_details = f"\n\n{notification.order_details}" if notification and notification.order_details else ""
 
     if notification and notification.user_telegram_id:
         try:
@@ -2396,11 +2395,15 @@ async def manual_qris_nominal_value(update: Update, context: ContextTypes.DEFAUL
                 text=(
                     f"✅ Payment Confirmed!\n\n"
                     f"💳 Method: QRIS (manual)\n"
-                    f"💰 Credited Amount: {format_price(credited_amount)}"
+                    f"💰 Paid Amount: {format_price(credited_amount)}"
                     f"{override_note}\n"
-                    f"💵 New Balance: {format_price(new_balance)}"
+                    f"📝 Order ID: #{notification.order_id}"
+                    f"{order_details}"
                 )
             )
+            from handlers.payment_handlers import send_supporting_file
+            for file_info in notification.supporting_files or []:
+                await send_supporting_file(context.bot, notification.user_telegram_id, file_info)
         except Exception:
             pass
 

@@ -18,9 +18,11 @@ class ProductType(enum.Enum):
 
 class OrderStatus(enum.Enum):
     """Enum for order status."""
+    PENDING_PAYMENT = "Pending Payment"
     PROCESSING = "Processing"
     COMPLETED = "Completed"
     CANCELLED = "Cancelled"
+    EXPIRED = "Expired"
 
 
 class DisputeStatus(enum.Enum):
@@ -52,7 +54,6 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False, index=True)
     username = Column(String(255))
-    wallet_balance = Column(Integer, default=0)
     is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -166,6 +167,7 @@ class Order(Base):
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     assigned_keys = relationship("ProductKey", back_populates="order")
     disputes = relationship("Dispute", back_populates="order", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="order")
 
 
 class OrderItem(Base):
@@ -186,11 +188,12 @@ class OrderItem(Base):
 
 
 class Transaction(Base):
-    """Transaction model for wallet funding history."""
+    """Transaction model for order payment attempts."""
     __tablename__ = 'transactions'
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('orders.id'), nullable=True, index=True)
     amount = Column(Integer, nullable=False)
     payment_method = Column(Enum(PaymentMethod), nullable=False)
     provider_name = Column(String(100), nullable=True)
@@ -214,6 +217,7 @@ class Transaction(Base):
 
     # Relationships
     user = relationship("User", back_populates="transactions")
+    order = relationship("Order", back_populates="transactions")
 
 
 class Settings(Base):
@@ -257,4 +261,97 @@ class Dispute(Base):
 
     # Relationships
     order = relationship("Order", back_populates="disputes")
+    user = relationship("User")
+
+
+class AdminLoginToken(Base):
+    """Short-lived, one-time token issued to the configured Telegram admin."""
+    __tablename__ = 'admin_login_tokens'
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    admin_telegram_id = Column(Integer, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AdminOtpCode(Base):
+    """Short-lived, one-time numeric OTP issued to the configured Telegram admin."""
+    __tablename__ = 'admin_otp_codes'
+
+    id = Column(Integer, primary_key=True)
+    code_hash = Column(String(64), nullable=False, index=True)
+    admin_telegram_id = Column(Integer, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AdminAuditLog(Base):
+    """Non-sensitive record of mutations made from an admin surface."""
+    __tablename__ = 'admin_audit_logs'
+
+    id = Column(Integer, primary_key=True)
+    admin_telegram_id = Column(Integer, nullable=False, index=True)
+    action = Column(String(100), nullable=False, index=True)
+    entity_type = Column(String(100), nullable=False, index=True)
+    entity_id = Column(String(100), nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class StockAdjustment(Base):
+    """Append-only inventory change history for admin restocks and edits."""
+    __tablename__ = 'stock_adjustments'
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False, index=True)
+    adjustment_type = Column(String(50), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    source = Column(String(50), nullable=False)
+    admin_telegram_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    product = relationship("Product")
+
+
+class BroadcastJob(Base):
+    """Asynchronous Telegram broadcast requested by an administrator."""
+    __tablename__ = 'broadcast_jobs'
+
+    id = Column(Integer, primary_key=True)
+    admin_telegram_id = Column(Integer, nullable=False)
+    message_text = Column(Text, nullable=False)
+    image_path = Column(String(500), nullable=True)
+    status = Column(String(30), default='pending', nullable=False, index=True)
+    target_count = Column(Integer, default=0, nullable=False)
+    sent_count = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    deliveries = relationship(
+        "BroadcastDelivery",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+
+
+class BroadcastDelivery(Base):
+    """Per-recipient delivery state used for progress and targeted retries."""
+    __tablename__ = 'broadcast_deliveries'
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey('broadcast_jobs.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    status = Column(String(30), default='pending', nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    error_message = Column(String(500), nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+
+    job = relationship("BroadcastJob", back_populates="deliveries")
     user = relationship("User")

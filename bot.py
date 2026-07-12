@@ -4,11 +4,12 @@ import logging
 import os
 import time
 from telegram.error import NetworkError, TimedOut
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, PreCheckoutQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 from config import settings, validate_settings
 from database import init_db
 from database.init_data import initialize_database
 from handlers import user_handlers, admin_handlers, payment_handlers, admin_conversations, dispute_handlers
+from services.admin_broadcasts import process_admin_broadcast_queue
 
 # M""M M"""""""`YM M""""""'YMM M"""""`'"""`YM M""""""'YMM MM""""""""`M M""MMMMM""M 
 # M  M M  mmmm.  M M  mmmm. `M M  mm.  mm.  M M  mmmm. `M MM  mmmmmmmM M  MMMMM  M 
@@ -101,30 +102,6 @@ def main():
     application.add_handler(CommandHandler("admin", admin_handlers.admin_command))
 
     # Register conversation handlers for multi-step flows
-
-    # Top-up conversation
-    topup_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(payment_handlers.topup_start, pattern="^topup$")],
-        states={
-            payment_handlers.AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_handlers.topup_amount)],
-            payment_handlers.METHOD: [
-                CallbackQueryHandler(payment_handlers.payment_method_selected, pattern="^pay_"),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(payment_handlers.cancel_topup, pattern="^cancel$"),
-            CallbackQueryHandler(payment_handlers.cancel_topup)
-        ],
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True,
-    )
-    application.add_handler(topup_conv_handler)
-
-    # Telegram Payments (Card) handlers — confirmation arrives via the bot's update
-    # polling, not a separate job: approve the pre-checkout, then credit on success.
-    application.add_handler(PreCheckoutQueryHandler(payment_handlers.precheckout_callback))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, payment_handlers.successful_payment_callback))
 
     # Product creation conversation
     create_product_conv = ConversationHandler(
@@ -558,6 +535,7 @@ def main():
 
     # Admin callback handlers
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_menu_callback, pattern="^admin_menu$"))
+    application.add_handler(CallbackQueryHandler(admin_handlers.admin_open_web_panel_callback, pattern="^admin_open_web_panel$"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_products_callback, pattern="^admin_products"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_restock_keys_callback, pattern="^admin_restock_keys$"))
     application.add_handler(CallbackQueryHandler(admin_handlers.admin_manage_categories_callback, pattern="^admin_manage_categories$"))
@@ -596,6 +574,7 @@ def main():
         interval=15,
         first=30
     )
+    job_queue.run_repeating(process_admin_broadcast_queue, interval=5, first=5)
 
     # Availability broadcast job - runs every 12 hours (43200 seconds)
     logger.info("Scheduling availability broadcast job (first run in 10 seconds, then every 12 hours)")

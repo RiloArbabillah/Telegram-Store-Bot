@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Masuk | Panel Toko</title>
+  <link rel="stylesheet" href="{{ url_for('admin_panel.static', filename='admin.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-panel">
+    <div class="brand login-brand"><span>TS</span><strong>Tele Store</strong></div>
+    <h1>Panel Admin</h1>
+    {% if login_error %}<p role="alert">OTP tidak valid atau sudah kedaluwarsa.</p>{% endif %}
+    <p>Minta OTP dari menu admin bot Telegram, lalu masukkan kode 8 angka di sini.</p>
+    <form id="login-form" method="post" action="{{ url_for('admin_panel.create_session') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>OTP Admin
+        <input name="otp" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="one-time-code" required autofocus>
+      </label>
+      <button class="button primary" type="submit">Masuk</button>
+    </form>
+  </main>
+</body>
+</html>

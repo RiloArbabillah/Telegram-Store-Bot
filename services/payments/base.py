@@ -38,10 +38,12 @@ class PaymentNotification:
 
     user_telegram_id: int
     amount: float
-    new_balance: float
     transaction_id: int
     payment_method: str
     provider_name: str | None = None
+    order_id: int | None = None
+    order_details: str = ""
+    supporting_files: list[dict[str, Any]] | None = None
 
 
 @dataclass

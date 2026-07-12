@@ -40,7 +40,7 @@ class CryptoBotService:
                 "currency_type": "fiat",
                 "fiat": "USD",
                 "amount": str(amount),
-                "description": f"Wallet top-up #{transaction_id}",
+                "description": f"Order payment #{transaction_id}",
                 "paid_btn_name": "callback",
                 "paid_btn_url": f"https://t.me/your_bot?start=payment_{transaction_id}",
                 "allow_comments": False,

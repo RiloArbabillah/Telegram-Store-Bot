@@ -92,24 +92,24 @@ def validate_amount(amount_str: str) -> tuple[bool, int, str]:
 def get_effective_product_stock(product, session=None) -> int:
     """Return effective available stock for a product.
 
-    For AKUN products, counts unsold ProductKey rows rather than trusting
-    the cached stock_count field.  For all other product types the cached
-    stock_count is returned as-is.
+    For KEY and AKUN products, counts ProductKey rows that are neither sold
+    nor reserved by a pending order. For FILE products the cached stock_count
+    field is returned as-is.
     """
-    if product.product_type != ProductType.AKUN:
+    if product.product_type not in {ProductType.KEY, ProductType.AKUN}:
         return int(product.stock_count or 0)
 
     if session is None:
         with get_db_session() as owned_session:
             return int(
                 owned_session.query(ProductKey)
-                .filter_by(product_id=product.id, is_sold=False)
+                .filter_by(product_id=product.id, is_sold=False, order_id=None)
                 .count()
             )
 
     return int(
         session.query(ProductKey)
-        .filter_by(product_id=product.id, is_sold=False)
+        .filter_by(product_id=product.id, is_sold=False, order_id=None)
         .count()
     )
 
@@ -174,9 +174,10 @@ def parse_supporting_files(raw_value: str | None) -> list[dict]:
 
     files = []
     for item in parsed:
-        if isinstance(item, dict) and item.get("file_id"):
+        if isinstance(item, dict) and (item.get("file_id") or item.get("storage_path")):
             files.append({
-                "file_id": str(item["file_id"]),
+                "file_id": str(item.get("file_id") or ""),
+                "storage_path": str(item.get("storage_path") or ""),
                 "file_name": str(item.get("file_name") or "file"),
                 "mime_type": str(item.get("mime_type") or ""),
                 "file_type": str(item.get("file_type") or ""),
@@ -190,10 +191,12 @@ def dump_supporting_files(files: list[dict] | None) -> str | None:
     normalized = []
     for item in files or []:
         file_id = item.get("file_id")
-        if not file_id:
+        storage_path = item.get("storage_path")
+        if not file_id and not storage_path:
             continue
         normalized.append({
-            "file_id": str(file_id),
+            "file_id": str(file_id or ""),
+            "storage_path": str(storage_path or ""),
             "file_name": str(item.get("file_name") or "file"),
             "mime_type": str(item.get("mime_type") or ""),
             "file_type": str(item.get("file_type") or ""),

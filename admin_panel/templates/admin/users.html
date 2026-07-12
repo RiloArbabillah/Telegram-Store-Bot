@@ -1,1 +1,47 @@
-{% extends 'admin/base.html' %}{% block title %}Pengguna{% endblock %}{% block content %}<div class="page-heading"><div><h1>Pengguna</h1><p>{{ data.total }} akun terdaftar.</p></div></div><form class="toolbar"><input name="q" value="{{ search }}" placeholder="Cari username atau Telegram ID"><button class="button">Cari</button></form><div class="table-wrap"><table><thead><tr><th>Pengguna</th><th>Telegram ID</th><th>Saldo</th><th>Status</th><th>Aksi</th></tr></thead><tbody>{% for user in data.rows %}<tr><td><a class="table-link" href="{{ url_for('admin_panel.user_detail', user_id=user.id) }}"><strong>@{{ user.username or 'tanpa_username' }}</strong></a><small>Sejak {{ user.created_at.strftime('%d %b %Y') }}</small></td><td>{{ user.telegram_id }}</td><td>{{ format_price(user.wallet_balance) }}</td><td><span class="status {{ 'danger' if user.is_banned else 'success' }}">{{ 'Diblokir' if user.is_banned else 'Aktif' }}</span></td><td><form method="post" data-confirm="Ubah status pengguna ini?" action="{{ url_for('admin_panel.user_status', user_id=user.id, action='unban' if user.is_banned else 'ban') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button {{ 'ghost' if user.is_banned else 'danger' }}" type="submit">{{ 'Buka blokir' if user.is_banned else 'Blokir' }}</button></form></td></tr>{% endfor %}</tbody></table></div>{% include 'admin/_pagination.html' %}{% endblock %}
+{% extends 'admin/base.html' %}
+{% block title %}Pengguna{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>Pengguna</h1>
+    <p>{{ data.total }} akun terdaftar.</p>
+  </div>
+</div>
+<form class="toolbar">
+  <input name="q" value="{{ search }}" placeholder="Cari username atau Telegram ID">
+  <button class="button">Cari</button>
+</form>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Pengguna</th>
+        <th>Telegram ID</th>
+        <th>Status</th>
+        <th>Aksi</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in data.rows %}
+      <tr>
+        <td>
+          <a class="table-link" href="{{ url_for('admin_panel.user_detail', user_id=user.id) }}">
+            <strong>@{{ user.username or 'tanpa_username' }}</strong>
+          </a>
+          <small>Sejak {{ user.created_at.strftime('%d %b %Y') }}</small>
+        </td>
+        <td>{{ user.telegram_id }}</td>
+        <td><span class="status {{ 'danger' if user.is_banned else 'success' }}">{{ 'Diblokir' if user.is_banned else 'Aktif' }}</span></td>
+        <td>
+          <form method="post" data-confirm="Ubah status pengguna ini?" action="{{ url_for('admin_panel.user_status', user_id=user.id, action='unban' if user.is_banned else 'ban') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="button {{ 'ghost' if user.is_banned else 'danger' }}" type="submit">{{ 'Buka blokir' if user.is_banned else 'Blokir' }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include 'admin/_pagination.html' %}
+{% endblock %}

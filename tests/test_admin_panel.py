@@ -18,6 +18,7 @@ from database.models import (
     Order,
     PaymentMethod,
     Product,
+    ProductKey,
     ProductType,
     Settings,
     Transaction,
@@ -275,6 +276,109 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
         with self.Session() as session:
             self.assertTrue(session.query(BroadcastJob).order_by(BroadcastJob.id.desc()).first().image_path)
 
+    def test_product_form_uses_bot_price_and_category_rules(self):
+        self.authenticate()
+
+        response = self.post(
+            "/admin/products/new",
+            {
+                "name": "Produk Tanpa Kategori",
+                "description": "Desc",
+                "price": "Rp10.000",
+                "product_type": "key",
+                "category_id": "",
+                "is_active": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        with self.Session() as session:
+            self.assertIsNone(session.query(Product).filter_by(name="Produk Tanpa Kategori").first())
+
+        with self.Session() as session:
+            category_id = session.query(Category).one().id
+
+        response = self.post(
+            "/admin/products/new",
+            {
+                "name": "Produk Rupiah",
+                "description": "Desc",
+                "price": "Rp10.000",
+                "product_type": "key",
+                "category_id": str(category_id),
+                "is_active": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.Session() as session:
+            self.assertEqual(session.query(Product).filter_by(name="Produk Rupiah").one().price, 10000)
+
+    def test_file_product_requires_download_link(self):
+        self.authenticate()
+        with self.Session() as session:
+            category_id = session.query(Category).one().id
+
+        response = self.post(
+            "/admin/products/new",
+            {
+                "name": "Produk File",
+                "description": "Desc",
+                "price": "10000",
+                "product_type": "file",
+                "category_id": str(category_id),
+                "download_link": "",
+                "is_active": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_akun_restock_accepts_only_one_credential_per_submit(self):
+        self.authenticate()
+        with self.Session.begin() as session:
+            category_id = session.query(Category).one().id
+            product = Product(
+                name="Akun",
+                price=10000,
+                stock_count=0,
+                product_type=ProductType.AKUN,
+                category_id=category_id,
+            )
+            session.add(product)
+            session.flush()
+            product_id = product.id
+
+        response = self.post(f"/admin/products/{product_id}/restock", {"items": "akun1\nakun2"})
+
+        self.assertEqual(response.status_code, 302)
+        with self.Session() as session:
+            self.assertEqual(session.get(Product, product_id).stock_count, 0)
+
+        response = self.post(f"/admin/products/{product_id}/restock", {"items": "akun1"})
+
+        self.assertEqual(response.status_code, 302)
+        with self.Session() as session:
+            self.assertEqual(session.get(Product, product_id).stock_count, 1)
+
+    def test_settings_usernames_are_normalized_like_bot(self):
+        self.authenticate()
+
+        response = self.post(
+            "/admin/settings",
+            {
+                "welcome_message": "Halo",
+                "support_username": "@support",
+                "channel_username": "@channel",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.Session() as session:
+            settings = session.query(Settings).one()
+            self.assertEqual(settings.support_username, "support")
+            self.assertEqual(settings.channel_username, "channel")
+
     def test_detail_pages_render_and_used_category_cannot_be_deleted(self):
         self.authenticate()
         with self.Session() as session:
@@ -301,6 +405,27 @@ class AdminPanelAuthenticationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.Session() as session:
             self.assertIsNotNone(session.get(Category, category_id))
+
+    def test_product_stock_page_separates_available_and_reserved_keys(self):
+        self.authenticate()
+        with self.Session.begin() as session:
+            product = session.query(Product).one()
+            order = session.query(Order).one()
+            product.stock_count = 2
+            session.add_all(
+                [
+                    ProductKey(product_id=product.id, key_value="READY"),
+                    ProductKey(product_id=product.id, key_value="LOCKED", order_id=order.id),
+                ]
+            )
+            product_id = product.id
+
+        response = self.client.get(f"/admin/products/{product_id}/stock")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<span>Key tersedia</span><strong>1</strong>", body)
+        self.assertIn("<span>Key terkunci</span><strong>1</strong>", body)
 
 
 if __name__ == "__main__":

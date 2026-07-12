@@ -38,6 +38,11 @@ from database.models import (
 )
 from services.admin_auth import consume_admin_otp
 from services.admin_broadcasts import retry_failed_broadcast
+from services.admin_form_rules import (
+    normalize_settings_form,
+    validate_product_form,
+    validate_restock_form,
+)
 from services.admin_operations import (
     AdminOperationError,
     cancel_order,
@@ -51,6 +56,7 @@ from services.admin_operations import (
     set_user_banned,
 )
 from services.admin_uploads import UploadError, save_document, save_image
+from services.payments.qris_static import QrisPayloadError, decode_qr_payload_from_image
 from utils import dump_supporting_files, format_price
 
 
@@ -184,7 +190,7 @@ def create_admin_blueprint(config, session_provider):
                 "revenue": db_session.query(func.coalesce(func.sum(Transaction.confirmed_amount), 0))
                 .filter(Transaction.status == TransactionStatus.COMPLETED)
                 .scalar(),
-                "pending_orders": db_session.query(Order).filter_by(status=OrderStatus.PROCESSING).count(),
+                "pending_orders": db_session.query(Order).filter(Order.status.in_([OrderStatus.PENDING_PAYMENT, OrderStatus.PROCESSING])).count(),
                 "pending_transactions": db_session.query(Transaction).filter_by(status=TransactionStatus.PENDING).count(),
                 "open_disputes": db_session.query(Dispute).filter_by(status=DisputeStatus.OPENED).count(),
                 "low_stock": db_session.query(Product).filter(Product.is_active.is_(True), Product.stock_count <= 5).count(),
@@ -222,27 +228,21 @@ def create_admin_blueprint(config, session_provider):
         }
 
     def apply_product_form(db_session, product):
-        name = request.form.get("name", "").strip()
-        if not name:
-            raise AdminOperationError("Nama produk wajib diisi.")
-        try:
-            price = int(request.form.get("price", "0"))
-        except ValueError as exc:
-            raise AdminOperationError("Harga produk tidak valid.") from exc
-        if price <= 0:
-            raise AdminOperationError("Harga produk harus lebih dari nol.")
-        try:
-            product_type = ProductType(request.form.get("product_type", ""))
-        except ValueError as exc:
-            raise AdminOperationError("Tipe produk tidak valid.") from exc
-        product.name = name
-        product.description = request.form.get("description", "").strip() or None
-        product.price = price
-        product.product_type = product_type
-        product.category_id = int(request.form["category_id"]) if request.form.get("category_id") else None
-        product.subcategory_id = int(request.form["subcategory_id"]) if request.form.get("subcategory_id") else None
-        product.download_link = request.form.get("download_link", "").strip() or None
-        product.is_active = request.form.get("is_active") == "1"
+        categories = db_session.query(Category.id).all()
+        subcategories = db_session.query(Subcategory.id, Subcategory.category_id).all()
+        form_data = validate_product_form(
+            request.form,
+            category_ids={row.id for row in categories},
+            subcategories_by_id={row.id: row.category_id for row in subcategories},
+        )
+        product.name = form_data.name
+        product.description = form_data.description
+        product.price = form_data.price
+        product.product_type = form_data.product_type
+        product.category_id = form_data.category_id
+        product.subcategory_id = form_data.subcategory_id
+        product.download_link = form_data.download_link
+        product.is_active = form_data.is_active
         image = request.files.get("image")
         if image and image.filename:
             product.image_path = save_image(image, getattr(config, "ASSETS_DIR", "assets"), "products")
@@ -298,7 +298,15 @@ def create_admin_blueprint(config, session_provider):
     @panel.post("/admin/products/<int:product_id>/restock")
     @login_required
     def product_restock(product_id):
-        items = request.form.get("items", "").splitlines()
+        with session_provider() as db_session:
+            product = db_session.get(Product, product_id)
+            if not product:
+                abort(404)
+            try:
+                items = validate_restock_form(product.product_type, request.form.get("items", ""))
+            except AdminOperationError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("admin_panel.products"))
         supporting_files = None
         upload = request.files.get("supporting_file")
         if upload and upload.filename:
@@ -334,9 +342,22 @@ def create_admin_blueprint(config, session_provider):
             if not product:
                 abort(404)
             adjustments = db_session.query(StockAdjustment).filter_by(product_id=product.id).order_by(StockAdjustment.created_at.desc()).all()
-            available_keys = db_session.query(ProductKey).filter_by(product_id=product.id, is_sold=False).count()
+            available_keys = db_session.query(ProductKey).filter_by(product_id=product.id, is_sold=False, order_id=None).count()
+            locked_keys = (
+                db_session.query(ProductKey)
+                .filter(ProductKey.product_id == product.id, ProductKey.is_sold.is_(False), ProductKey.order_id.isnot(None))
+                .count()
+            )
             sold_keys = db_session.query(ProductKey).filter_by(product_id=product.id, is_sold=True).count()
-            return render_template("admin/stock.html", active_page="products", product=product, adjustments=adjustments, available_keys=available_keys, sold_keys=sold_keys)
+            return render_template(
+                "admin/stock.html",
+                active_page="products",
+                product=product,
+                adjustments=adjustments,
+                available_keys=available_keys,
+                locked_keys=locked_keys,
+                sold_keys=sold_keys,
+            )
 
     @panel.get("/admin/categories")
     @login_required
@@ -440,7 +461,7 @@ def create_admin_blueprint(config, session_provider):
             user = db_session.get(User, user_id)
             if not user:
                 abort(404)
-            details = [("Telegram ID", user.telegram_id), ("Username", f"@{user.username}" if user.username else "-"), ("Saldo", format_price(user.wallet_balance)), ("Status", "Diblokir" if user.is_banned else "Aktif")]
+            details = [("Telegram ID", user.telegram_id), ("Username", f"@{user.username}" if user.username else "-"), ("Status", "Diblokir" if user.is_banned else "Aktif")]
             related = [(f"Pesanan #{order.id}", f"{format_price(order.total_amount)} · {order.status.value}") for order in db_session.query(Order).filter_by(user_id=user.id).order_by(Order.created_at.desc()).limit(10)]
             return render_template("admin/detail.html", active_page="users", title="Detail pengguna", details=details, related_title="Aktivitas pesanan", related=related, back_url=url_for("admin_panel.users"))
 
@@ -558,20 +579,27 @@ def create_admin_blueprint(config, session_provider):
                 db_session.add(store)
                 db_session.flush()
             if request.method == "POST":
-                store.welcome_message = request.form.get("welcome_message", "").strip()
-                store.support_username = request.form.get("support_username", "").strip() or None
-                store.channel_username = request.form.get("channel_username", "").strip() or None
-                store.qris_instructions_text = request.form.get("qris_instructions_text", "").strip() or None
-                store.qris_static_payload = request.form.get("qris_static_payload", "").strip() or None
+                form_data = normalize_settings_form(request.form)
+                store.welcome_message = form_data.welcome_message
+                store.support_username = form_data.support_username
+                store.channel_username = form_data.channel_username
+                store.qris_instructions_text = form_data.qris_instructions_text
+                store.qris_static_payload = form_data.qris_static_payload
                 logo = request.files.get("store_logo")
                 qris_image = request.files.get("qris_image")
                 try:
                     if logo and logo.filename:
                         store.store_logo_path = save_image(logo, getattr(config, "ASSETS_DIR", "assets"), "logos")
                     if qris_image and qris_image.filename:
+                        content = qris_image.stream.read()
+                        qris_image.stream.seek(0)
+                        store.qris_static_payload = decode_qr_payload_from_image(content)
                         store.qris_image_file_id = save_image(qris_image, getattr(config, "ASSETS_DIR", "assets"), "qris")
                 except UploadError as exc:
                     flash(str(exc), "error")
+                    return render_template("admin/settings.html", active_page="settings", store=store), 400
+                except QrisPayloadError as exc:
+                    flash(f"Gambar QRIS tidak valid: {exc}", "error")
                     return render_template("admin/settings.html", active_page="settings", store=store), 400
                 record_audit(db_session, admin_id=config.ADMIN_TELEGRAM_ID, action="settings.update", entity_type="settings", entity_id=store.id)
                 flash("Pengaturan toko berhasil disimpan.", "success")

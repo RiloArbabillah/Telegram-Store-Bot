@@ -143,7 +143,7 @@ async def _safe_edit_message(query, text: str, *, reply_markup=None, retries: in
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command - show welcome message with wallet balance."""
+    """Handle /start command - show welcome message."""
     user = update.effective_user
     telegram_id = user.id
     username = user.username
@@ -163,8 +163,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.commit()
             session.refresh(db_user)
 
-        wallet_balance = db_user.wallet_balance
-
         # Get store settings
         store_settings = session.query(Settings).first()
         welcome_msg = store_settings.welcome_message if store_settings else "Welcome to our Digital Products Store!"
@@ -175,11 +173,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(logo_path, 'rb') as logo:
             await update.message.reply_photo(photo=logo)
 
-    # Send welcome message with wallet balance
-    message = f"{welcome_msg}\n\n💰 Your Wallet Balance: {format_price(wallet_balance)}"
-
     await update.message.reply_text(
-        message,
+        welcome_msg,
         reply_markup=create_main_menu_keyboard()
     )
 
@@ -205,16 +200,12 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             session.commit()
             session.refresh(db_user)
 
-        wallet_balance = db_user.wallet_balance
-
         # Get store settings
         store_settings = session.query(Settings).first()
         welcome_msg = store_settings.welcome_message if store_settings else "Welcome to our Digital Products Store!"
 
-    message = f"{welcome_msg}\n\n💰 Your Wallet Balance: {format_price(wallet_balance)}"
-
     await query.edit_message_text(
-        message,
+        welcome_msg,
         reply_markup=create_main_menu_keyboard()
     )
 

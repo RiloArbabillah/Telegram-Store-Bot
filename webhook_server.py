@@ -84,11 +84,13 @@ def process_provider_webhook(payment_method: PaymentMethod, payload: dict):
 
 def build_payment_notification_messages(notification):
     """Build Telegram messages for a completed payment notification."""
+    order_line = f"\n📝 Order ID: #{notification.order_id}" if notification.order_id else ""
+    details = f"\n\n{notification.order_details}" if notification.order_details else ""
     user_message = f"""✅ Payment Confirmed!
 
 💳 Method: {notification.payment_method}
-💰 Amount: {format_price(notification.amount)}
-🔄 Your new wallet balance: {format_price(notification.new_balance)}
+💰 Amount: {format_price(notification.amount)}{order_line}
+{details}
 
 Thank you for your payment!"""
 
@@ -97,6 +99,7 @@ Thank you for your payment!"""
 👤 User ID: {notification.user_telegram_id}
 💰 Amount: {format_price(notification.amount)}
 📝 Transaction ID: #{notification.transaction_id}
+{f"🛍 Order ID: #{notification.order_id}" if notification.order_id else ""}
 🔄 Payment Method: {notification.payment_method}"""
 
     return user_message, admin_message
@@ -399,7 +402,6 @@ def payment_deka_webhook():
             )
             if notification:
                 print(f"   Credited: {format_price(notification.amount)}")
-                print(f"   New balance: {format_price(notification.new_balance)}")
                 send_payment_notifications(notification)
 
             return jsonify({

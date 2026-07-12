@@ -18,9 +18,11 @@ class ProductType(enum.Enum):
 
 class OrderStatus(enum.Enum):
     """Enum for order status."""
+    PENDING_PAYMENT = "Pending Payment"
     PROCESSING = "Processing"
     COMPLETED = "Completed"
     CANCELLED = "Cancelled"
+    EXPIRED = "Expired"
 
 
 class DisputeStatus(enum.Enum):
@@ -52,7 +54,6 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False, index=True)
     username = Column(String(255))
-    wallet_balance = Column(Integer, default=0)
     is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -166,6 +167,7 @@ class Order(Base):
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     assigned_keys = relationship("ProductKey", back_populates="order")
     disputes = relationship("Dispute", back_populates="order", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="order")
 
 
 class OrderItem(Base):
@@ -186,11 +188,12 @@ class OrderItem(Base):
 
 
 class Transaction(Base):
-    """Transaction model for wallet funding history."""
+    """Transaction model for order payment attempts."""
     __tablename__ = 'transactions'
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('orders.id'), nullable=True, index=True)
     amount = Column(Integer, nullable=False)
     payment_method = Column(Enum(PaymentMethod), nullable=False)
     provider_name = Column(String(100), nullable=True)
@@ -214,6 +217,7 @@ class Transaction(Base):
 
     # Relationships
     user = relationship("User", back_populates="transactions")
+    order = relationship("Order", back_populates="transactions")
 
 
 class Settings(Base):

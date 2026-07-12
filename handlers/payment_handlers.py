@@ -1,27 +1,23 @@
-"""Payment and wallet management handlers."""
+"""Payment and direct checkout handlers."""
 
 from io import BytesIO
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from database import (
-    get_db_session, User, Transaction, Order, OrderItem, Product,
-    ProductKey, TransactionStatus, OrderStatus, PaymentMethod, ProductType
+    get_db_session, User, Transaction, Product,
+    ProductKey, TransactionStatus, PaymentMethod, ProductType
 )
 from utils import (
-    get_or_create_user, format_price, validate_amount,
-    create_cancel_keyboard, create_payment_method_keyboard,
+    format_price,
     create_quantity_keyboard, create_main_menu_keyboard,
     notify_admin, check_user_banned, parse_supporting_files
 )
 from services.payments import (
     PaymentCreationError,
     get_provider,
-    get_provider_by_callback,
     hydrate_legacy_transaction,
-    list_payment_options,
-    list_payment_providers,
 )
 from services.payments.common import (
     get_qris_message_refs,
@@ -30,10 +26,8 @@ from services.payments.common import (
     register_qris_message_ref,
 )
 from services.payments.qris_messages import cleanup_qris_messages
+from services.direct_checkout import CheckoutError, create_pending_checkout, expire_pending_checkout
 from config.settings import settings as app_settings
-
-# Conversation states for top-up
-AMOUNT, METHOD = range(2)
 
 # Conversation states for direct purchase
 PURCHASE_QUANTITY = 10
@@ -65,61 +59,6 @@ async def send_supporting_file(bot, chat_id: int, file_info: dict) -> bool:
     except Exception as exc:
         print(f"❌ Failed to send supporting file {file_info.get('file_name', 'file')}: {exc}")
         return False
-
-
-async def topup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start the wallet top-up flow."""
-    query = update.callback_query
-    await query.answer()
-
-    message = "💬 Please reply the amount IDR you want to fund your wallet.\nExample: 10000"
-
-    await query.edit_message_text(
-        message,
-        reply_markup=create_cancel_keyboard()
-    )
-
-    return AMOUNT
-
-
-async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle amount input for wallet top-up."""
-    amount_str = update.message.text
-
-    # Validate amount
-    is_valid, amount, error_msg = validate_amount(amount_str)
-
-    if not is_valid:
-        await update.message.reply_text(
-            f"❌ {error_msg}\n\nPlease enter a valid amount:",
-            reply_markup=create_cancel_keyboard()
-        )
-        return AMOUNT
-
-    # Store amount in context
-    context.user_data['topup_amount'] = amount
-
-    payment_options = [
-        (option.label, f"pay_{option.method.value}")
-        for option in list_payment_options()
-        if option.enabled
-    ]
-
-    if not payment_options:
-        await update.message.reply_text(
-            "❌ No payment methods are currently available. Please contact support.",
-            reply_markup=create_cancel_keyboard()
-        )
-        return ConversationHandler.END
-
-    message = f"💰 Amount: {format_price(amount)}\n\n💬 Please choose a payment method:"
-
-    await update.message.reply_text(
-        message,
-        reply_markup=create_payment_method_keyboard(payment_options)
-    )
-
-    return METHOD
 
 
 def _payment_page_markup(payment_page):
@@ -170,11 +109,13 @@ async def _send_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 def _build_payment_notifications(notif):
     """Build user/admin confirmation messages for a completed payment."""
+    order_line = f"\n📝 Order ID: #{notif.order_id}" if notif.order_id else ""
+    details = f"\n\n{notif.order_details}" if notif.order_details else ""
     user_message = f"""✅ Payment Confirmed!
 
 💳 Method: {notif.payment_method}
-💰 Amount: {format_price(notif.amount)}
-🔄 Your new wallet balance: {format_price(notif.new_balance)}
+💰 Amount: {format_price(notif.amount)}{order_line}
+{details}
 
 Thank you for your payment!"""
 
@@ -183,91 +124,10 @@ Thank you for your payment!"""
 👤 User ID: {notif.user_telegram_id}
 💰 Amount: {format_price(notif.amount)}
 📝 Transaction ID: #{notif.transaction_id}
+{f"🛍 Order ID: #{notif.order_id}" if notif.order_id else ""}
 🔄 Payment Method: {notif.payment_method}"""
 
     return user_message, admin_message
-
-
-async def payment_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle provider-driven payment method selection."""
-    query = update.callback_query
-    await query.answer()
-
-    provider = get_provider_by_callback(query.data)
-    if not provider:
-        await query.edit_message_text("❌ Unknown payment method. Please start again.")
-        return ConversationHandler.END
-
-    topup_amount = context.user_data.get('topup_amount', 0)
-    user_id = update.effective_user.id
-
-    if topup_amount <= 0:
-        await query.edit_message_text("❌ Invalid amount. Please start the top-up again.")
-        return ConversationHandler.END
-
-    with get_db_session() as session:
-        user = session.query(User).filter_by(telegram_id=user_id).first()
-        if not user:
-            await query.edit_message_text("❌ User not found.")
-            return ConversationHandler.END
-
-        try:
-            transaction, payment_page = provider.create_payment(session, user, topup_amount)
-        except PaymentCreationError as exc:
-            payment_options = [
-                (option.label, f"pay_{option.method.value}")
-                for option in list_payment_options()
-                if option.enabled
-            ]
-            await query.edit_message_text(
-                str(exc),
-                reply_markup=create_payment_method_keyboard(payment_options),
-            )
-            return METHOD
-
-        if provider.method == PaymentMethod.QRIS:
-            context.user_data['pending_qris_transaction_id'] = transaction.id
-        else:
-            context.user_data.pop('pending_qris_transaction_id', None)
-
-        payment_message = await _send_payment_page(update, context, payment_page)
-
-        cleanup_transaction_id = None
-        if provider.method == PaymentMethod.QRIS and payment_message:
-            session.refresh(transaction)
-            register_qris_message_ref(
-                transaction,
-                chat_id=payment_message.chat_id,
-                message_id=payment_message.message_id,
-            )
-            session.commit()
-            if transaction.status in {
-                TransactionStatus.COMPLETED,
-                TransactionStatus.EXPIRED,
-                TransactionStatus.FAILED,
-            }:
-                cleanup_transaction_id = transaction.id
-
-        if payment_page.invoice_request:
-            prices = [
-                LabeledPrice(label=label, amount=minor_units)
-                for label, minor_units in payment_page.invoice_request["prices"]
-            ]
-            await context.bot.send_invoice(
-                chat_id=update.effective_chat.id,
-                title=payment_page.invoice_request["title"],
-                description=payment_page.invoice_request["description"],
-                payload=payment_page.invoice_request["payload"],
-                provider_token=payment_page.invoice_request["provider_token"],
-                currency=payment_page.invoice_request["currency"],
-                prices=prices,
-                start_parameter=payment_page.invoice_request["start_parameter"],
-            )
-
-        if cleanup_transaction_id:
-            await cleanup_qris_messages(context.bot, cleanup_transaction_id)
-
-    return ConversationHandler.END
 
 
 async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,13 +170,16 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         if is_manual_qris_expired(transaction):
-            transaction.status = TransactionStatus.EXPIRED
+            if transaction.order_id:
+                expire_pending_checkout(session, transaction.id)
+            else:
+                transaction.status = TransactionStatus.EXPIRED
             session.commit()
             expired_transaction_id = transaction.id
             context.user_data.pop('pending_qris_transaction_id', None)
             await cleanup_qris_messages(context.bot, expired_transaction_id)
             await update.message.reply_text(
-                "⏰ This QRIS order has expired. Please create a new top-up request.",
+                "⏰ This QRIS order has expired. Please create a new checkout.",
                 reply_markup=create_main_menu_keyboard()
             )
             return
@@ -355,7 +218,7 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
         f"📱 QRIS Proof Submitted\n\n"
         f"🆔 Transaction: #{transaction_id}\n"
         f"👤 User: @{username}\n"
-        f"💰 Requested Top-up: {format_price(amount)}\n\n"
+        f"💰 Requested Amount: {format_price(amount)}\n\n"
         f"🔢 Unique Code: {unique_code:03d}\n"
         f"✅ Expected Paid: {format_price(payable_amount)}\n\n"
         f"Review the proof and choose an action:"
@@ -385,65 +248,6 @@ async def qris_proof_submission(update: Update, context: ContextTypes.DEFAULT_TY
         pass
 
 
-async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Approve the pre-checkout query if it maps to a valid pending payment."""
-    query = update.pre_checkout_query
-    payload = query.invoice_payload or ""
-
-    is_valid = False
-    with get_db_session() as session:
-        for provider in list_payment_providers():
-            if provider.validate_precheckout_payload(session, payload):
-                is_valid = True
-                break
-
-    if is_valid:
-        await query.answer(ok=True)
-    else:
-        await query.answer(
-            ok=False,
-            error_message="This payment order is no longer valid. Please start a new top-up."
-        )
-
-
-async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Credit the wallet once Telegram confirms a successful payment."""
-    payment = update.message.successful_payment
-    payload = payment.invoice_payload or ""
-
-    notif = None
-    with get_db_session() as session:
-        for provider in list_payment_providers():
-            notif = provider.handle_successful_payment(session, payload, payment)
-            if notif:
-                break
-
-    if not notif:
-        return
-
-    user_message, admin_message = _build_payment_notifications(notif)
-    await update.message.reply_text(user_message, reply_markup=create_main_menu_keyboard())
-    await notify_admin(context, admin_message)
-
-
-async def cancel_topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel the top-up process (during conversation)."""
-    query = update.callback_query
-    await query.answer()
-
-    from utils import create_back_support_keyboard
-
-    await query.edit_message_text(
-        "❌ Top-up cancelled.",
-        reply_markup=create_back_support_keyboard()
-    )
-
-    # Clear user data
-    context.user_data.clear()
-
-    return ConversationHandler.END
-
-
 async def cancel_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel from payment instruction page (outside conversation)."""
     query = update.callback_query
@@ -461,7 +265,10 @@ async def cancel_payment_page(update: Update, context: ContextTypes.DEFAULT_TYPE
                 and transaction.payment_method == PaymentMethod.QRIS
                 and transaction.status == TransactionStatus.PENDING
             ):
-                transaction.status = TransactionStatus.FAILED
+                if transaction.order_id:
+                    expire_pending_checkout(session, transaction.id)
+                else:
+                    transaction.status = TransactionStatus.FAILED
                 cleanup_transaction_id = transaction.id
                 session.commit()
 
@@ -522,6 +329,8 @@ async def check_pending_payments(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=notif.user_telegram_id,
                 text=user_message
             )
+            for file_info in notif.supporting_files or []:
+                await send_supporting_file(context.bot, notif.user_telegram_id, file_info)
         except Exception:
             pass
 
@@ -544,7 +353,10 @@ async def check_expired_payments(context: ContextTypes.DEFAULT_TYPE):
             for transaction in pending_transactions:
                 if transaction.expires_at and datetime.utcnow() > transaction.expires_at:
                     # Mark as expired
-                    transaction.status = TransactionStatus.EXPIRED
+                    if transaction.order_id:
+                        expire_pending_checkout(session, transaction.id)
+                    else:
+                        transaction.status = TransactionStatus.EXPIRED
 
                     # Get user info for notification
                     user = session.query(User).filter_by(id=transaction.user_id).first()
@@ -585,7 +397,7 @@ async def check_expired_payments(context: ContextTypes.DEFAULT_TYPE):
 💰 Amount: {format_price(notif['amount'])}
 📝 Transaction ID: #{notif['transaction_id']}
 
-Your payment order has expired. Please create a new top-up request if you still want to fund your wallet."""
+Your payment order has expired. Please create a new checkout if you still want to buy this product."""
 
         try:
             await context.bot.send_message(
@@ -709,61 +521,33 @@ async def show_purchase_confirmation(update: Update, context: ContextTypes.DEFAU
     quantity = context.user_data.get('purchase_quantity')
 
     total = product_price * quantity
-    telegram_id = update.effective_user.id
-
-    with get_db_session() as session:
-        user = session.query(User).filter_by(telegram_id=telegram_id).first()
-        if not user:
-            if is_message:
-                await update.message.reply_text("❌ User not found.")
-            else:
-                await update.callback_query.edit_message_text("❌ User not found.")
-            return ConversationHandler.END
-
-        wallet_balance = user.wallet_balance
-        has_sufficient_balance = wallet_balance >= total
-
-        if has_sufficient_balance:
-            balance_text = f"💰 Your Wallet Balance: {format_price(wallet_balance)}"
-        else:
-            balance_text = f"⚠️ Insufficient Balance!\n💰 Your Wallet Balance: {format_price(wallet_balance)}\n\n💡 Please top up your wallet first."
-
-        message = f"""🛒 Confirm Purchase
+    message = f"""🛒 Confirm Purchase
 
 📦 Product: {product_name}
 💰 Price: {format_price(product_price)} x {quantity}
-💵 Total: {format_price(total)}
+💵 Total: {format_price(total)}"""
 
-{balance_text}"""
+    keyboard = [
+        [InlineKeyboardButton("📱 Bayar QRIS", callback_data=f"confirm_purchase_{product_id}_{quantity}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_purchase")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-        if has_sufficient_balance:
-            keyboard = [
-                [InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_purchase_{product_id}_{quantity}")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_purchase")]
-            ]
+    if is_message:
+        await update.message.reply_text(message, reply_markup=reply_markup)
+    else:
+        query = update.callback_query
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(message, reply_markup=reply_markup)
         else:
-            keyboard = [
-                [InlineKeyboardButton("💰 Top Up Wallet", callback_data="topup")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_purchase")]
-            ]
+            await query.edit_message_text(message, reply_markup=reply_markup)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        if is_message:
-            await update.message.reply_text(message, reply_markup=reply_markup)
-        else:
-            query = update.callback_query
-            if query.message.photo:
-                await query.message.delete()
-                await query.message.reply_text(message, reply_markup=reply_markup)
-            else:
-                await query.edit_message_text(message, reply_markup=reply_markup)
-
-        return ConversationHandler.END
+    return ConversationHandler.END
 
 
 async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process the confirmed purchase."""
+    """Create a pending order and show QRIS payment instructions."""
     query = update.callback_query
     await query.answer()
 
@@ -794,126 +578,36 @@ async def confirm_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ This product is no longer available.")
             return
 
-        if product.stock_count < quantity:
-            await query.edit_message_text(f"❌ Not enough stock. Only {product.stock_count} available.")
-            return
-
-        # For KEY/AKUN products, also verify actual unsold inventory
-        if product.product_type in {ProductType.KEY, ProductType.AKUN}:
-            real_available = session.query(ProductKey).filter_by(
-                product_id=product.id, is_sold=False
-            ).count()
-            if real_available < quantity:
-                await query.edit_message_text(
-                    f"❌ Not enough stock. Only {real_available} available.",
-                    reply_markup=create_main_menu_keyboard()
-                )
-                return
-
-        total = product.price * quantity
-
-        # Check balance
-        if user.wallet_balance < total:
+        from utils.helpers import get_effective_product_stock
+        effective_stock = get_effective_product_stock(product, session=session)
+        if effective_stock < quantity:
             await query.edit_message_text(
-                f"❌ Insufficient balance.\n💰 Your balance: {format_price(user.wallet_balance)}\n💵 Required: {format_price(total)}"
+                f"❌ Not enough stock. Only {effective_stock} available.",
+                reply_markup=create_main_menu_keyboard()
             )
             return
 
-        # Create order
-        order = Order(
-            user_id=user.id,
-            total_amount=total,
-            status=OrderStatus.COMPLETED
-        )
-        session.add(order)
-        session.commit()
-        session.refresh(order)
+        total = product.price * quantity
 
-        # Create order item
-        order_item = OrderItem(
-            order_id=order.id,
-            product_id=product.id,
-            quantity=quantity,
-            price=product.price
-        )
+        try:
+            order = create_pending_checkout(session, user_id=user.id, product_id=product.id, quantity=quantity)
+            provider = get_provider(PaymentMethod.QRIS)
+            transaction, payment_page = provider.create_payment(session, user, order.total_amount, order_id=order.id)
+        except (CheckoutError, PaymentCreationError) as exc:
+            session.rollback()
+            await query.edit_message_text(str(exc), reply_markup=create_main_menu_keyboard())
+            return
 
-        # Deliver assets based on product type
-        order_details = ""
-        supporting_files_to_send = []
-        if product.product_type in {ProductType.KEY, ProductType.AKUN}:
-            # Atomically assign keys/accounts from product_keys table
-            try:
-                items = assign_product_keys(session, product.id, quantity, order.id)
-            except ValueError:
-                session.rollback()
-                await query.edit_message_text(
-                    f"❌ Sorry, not enough stock available for {product.name}.\nPlease try again with a lower quantity.",
-                    reply_markup=create_main_menu_keyboard()
-                )
-                return
-            delivered_values = [item["key_value"] for item in items]
-            order_item.delivered_asset = "\n".join(delivered_values)
-            label = "Akun" if product.product_type == ProductType.AKUN else "Keys"
-            order_details = f"📦 {product.name} (x{quantity})\n🔐 {label}:\n{order_item.delivered_asset}\n"
-            if product.product_type == ProductType.AKUN:
-                for index, item in enumerate(items, start=1):
-                    for file_info in item["supporting_files"]:
-                        supporting_files_to_send.append({
-                            **file_info,
-                            "caption": f"📎 {product.name} - Akun #{index} - {file_info.get('file_name', 'Supporting file')}",
-                        })
-                if supporting_files_to_send:
-                    order_details += f"📎 Supporting files: {len(supporting_files_to_send)} file(s) will be sent after this message.\n"
-
-        elif product.product_type == ProductType.FILE:
-            # Provide download link
-            order_item.delivered_asset = product.download_link
-            order_details = f"📦 {product.name}\n🔗 Download: {order_item.delivered_asset}\n"
-
-        # Update product stock
-        product.stock_count -= quantity
-
-        session.add(order_item)
-
-        # Deduct from wallet
-        user.wallet_balance -= total
-
-        session.commit()
-
-        # Notify user
-        user_message = f"""✅ Purchase Successful!
-
-💰 Total Amount: {format_price(total)}
-📝 Order ID: #{order.id}
-💳 Remaining Balance: {format_price(user.wallet_balance)}
-
-{order_details}
-Thank you for your purchase!"""
-
-        # Create keyboard with Home and Order History buttons
-        keyboard = [
-            [
-                InlineKeyboardButton("🏠 Home", callback_data="main_menu"),
-                InlineKeyboardButton("📋 Order History", callback_data="order_history")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(user_message, reply_markup=reply_markup)
-
-        for file_info in supporting_files_to_send:
-            await send_supporting_file(context.bot, telegram_id, file_info)
-
-        # Notify admin
-        admin_message = f"""🛍 New Order Received
-
-👤 User ID: {telegram_id}
-💰 Amount: {format_price(total)}
-📝 Order ID: #{order.id}
-
-{order_details}"""
-
-        await notify_admin(context, admin_message)
+        payment_message = await _send_payment_page(update, context, payment_page)
+        if payment_message:
+            session.refresh(transaction)
+            register_qris_message_ref(
+                transaction,
+                chat_id=payment_message.chat_id,
+                message_id=payment_message.message_id,
+            )
+            context.user_data['pending_qris_transaction_id'] = transaction.id
+            session.commit()
 
 
 async def cancel_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):

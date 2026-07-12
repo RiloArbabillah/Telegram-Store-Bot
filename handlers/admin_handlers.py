@@ -22,6 +22,7 @@ from config.settings import settings as app_settings
 from services.payments import complete_transaction, hydrate_legacy_transaction, payment_method_label
 from services.payments.common import is_manual_qris_expired
 from services.payments.qris_messages import cleanup_qris_messages
+from services.admin_operations import AdminOperationError, cancel_order
 from services.admin_auth import create_admin_otp
 from telegram.ext import ConversationHandler
 
@@ -386,7 +387,7 @@ async def admin_view_users_callback(update: Update, context: ContextTypes.DEFAUL
             username_display = f"@{user.username}" if user.username else f"ID:{user.telegram_id}"
             keyboard.append([
                 InlineKeyboardButton(
-                    f"{status_icon} {username_display} - {format_price(user.wallet_balance)}",
+                    f"{status_icon} {username_display}",
                     callback_data=f"view_user_{user.id}"
                 )
             ])
@@ -449,7 +450,6 @@ async def admin_user_detail_callback(update: Update, context: ContextTypes.DEFAU
         message = f"👤 User Details\n\n"
         message += f"Telegram ID: {user.telegram_id}\n"
         message += f"Username: {username_display}\n"
-        message += f"Balance: {format_price(user.wallet_balance)}\n"
         message += f"Status: {status}\n"
         message += f"Total Orders: {orders_count}\n"
         message += f"Total Spent: {format_price(total_spent)}\n"
@@ -520,7 +520,6 @@ async def admin_ban_user_callback(update: Update, context: ContextTypes.DEFAULT_
         message = f"👤 User Details\n\n"
         message += f"Telegram ID: {user.telegram_id}\n"
         message += f"Username: {username_display}\n"
-        message += f"Balance: {format_price(user.wallet_balance)}\n"
         message += f"Status: {status}\n"
         message += f"Total Orders: {orders_count}\n"
         message += f"Total Spent: {format_price(total_spent)}\n"
@@ -591,7 +590,6 @@ async def admin_unban_user_callback(update: Update, context: ContextTypes.DEFAUL
         message = f"👤 User Details\n\n"
         message += f"Telegram ID: {user.telegram_id}\n"
         message += f"Username: {username_display}\n"
-        message += f"Balance: {format_price(user.wallet_balance)}\n"
         message += f"Status: {status}\n"
         message += f"Total Orders: {orders_count}\n"
         message += f"Total Spent: {format_price(total_spent)}\n"
@@ -1131,7 +1129,7 @@ async def handle_ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle order cancellation with wallet refund."""
+    """Handle order cancellation."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Access denied.")
         return
@@ -1140,35 +1138,22 @@ async def handle_cancel_order(update: Update, context: ContextTypes.DEFAULT_TYPE
         order_id = int(update.message.text)
 
         with get_db_session() as session:
-            order = session.query(Order).filter_by(id=order_id).first()
-
-            if not order:
-                await update.message.reply_text("❌ Order not found.")
+            try:
+                order = cancel_order(session, order_id, admin_id=update.effective_user.id)
+            except AdminOperationError as exc:
+                await update.message.reply_text(f"❌ {exc}")
                 return
-
-            if order.status == OrderStatus.CANCELLED:
-                await update.message.reply_text("❌ Order is already cancelled.")
-                return
-
-            # Refund to wallet
             user = session.query(User).filter_by(id=order.user_id).first()
-            user.wallet_balance += order.total_amount
-
-            # Update order status
-            order.status = OrderStatus.CANCELLED
             session.commit()
 
-            await update.message.reply_text(
-                f"✅ Order #{order_id} cancelled successfully!\n"
-                f"💰 Refunded {format_price(order.total_amount)} to user's wallet."
-            )
+            await update.message.reply_text(f"✅ Order #{order_id} cancelled successfully.")
 
             # Notify user
-            await context.bot.send_message(
-                chat_id=user.telegram_id,
-                text=f"❌ Order #{order_id} has been cancelled by admin.\n"
-                     f"💰 {format_price(order.total_amount)} has been refunded to your wallet."
-            )
+            if user:
+                await context.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=f"❌ Order #{order_id} has been cancelled by admin."
+                )
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}\n\nFormat: order_id")
@@ -1439,28 +1424,29 @@ async def admin_confirm_payment_callback(update: Update, context: ContextTypes.D
         user_telegram_id = user.telegram_id if user else None
         requested_amount = txn.amount
         credited_amount = notification.amount if notification else (txn.confirmed_amount or txn.amount)
-        new_balance = user.wallet_balance if user else 0
         payment_label = _admin_payment_label(txn)
         completed_transaction_id = txn.id
 
     await cleanup_qris_messages(context.bot, completed_transaction_id)
 
-    await query.answer(f"✅ Payment confirmed! {format_price(credited_amount)} added to user's wallet.", show_alert=True)
+    await query.answer(f"✅ Payment confirmed! {format_price(credited_amount)} paid.", show_alert=True)
 
     # Notify user
     if user_telegram_id and notification:
         override_note = ""
         if credited_amount != requested_amount:
-            override_note = f"\n🧾 Requested Top-up: {format_price(requested_amount)}"
+            override_note = f"\n🧾 Requested Amount: {format_price(requested_amount)}"
+        order_details = f"\n\n{notification.order_details}" if notification.order_details else ""
         try:
             await context.bot.send_message(
                 chat_id=user_telegram_id,
                 text=(
                     f"✅ Payment Confirmed!\n\n"
                     f"💳 Method: {payment_label}\n"
-                    f"💰 Credited Amount: {format_price(credited_amount)}"
+                    f"💰 Paid Amount: {format_price(credited_amount)}"
                     f"{override_note}\n"
-                    f"💵 New Balance: {format_price(new_balance)}"
+                    f"📝 Order ID: #{notification.order_id}"
+                    f"{order_details}"
                 )
             )
         except Exception:
@@ -1533,29 +1519,22 @@ async def admin_cancel_order_callback(update: Update, context: ContextTypes.DEFA
     order_id = int(query.data.split("_")[2])
 
     with get_db_session() as session:
-        order = session.query(Order).filter_by(id=order_id).first()
-
-        if not order:
-            await query.edit_message_text("❌ Order not found.")
+        try:
+            order = cancel_order(session, order_id, admin_id=update.effective_user.id)
+        except AdminOperationError as exc:
+            await query.edit_message_text(f"❌ {exc}")
             return
-
-        # Refund user
         user = session.query(User).filter_by(id=order.user_id).first()
-        if user:
-            user.wallet_balance += order.total_amount
-
-        # Mark order as cancelled
-        order.status = OrderStatus.CANCELLED
         session.commit()
 
-        await query.answer(f"✅ Order cancelled and {format_price(order.total_amount)} refunded!", show_alert=True)
+        await query.answer("✅ Order cancelled.", show_alert=True)
 
         # Notify user
         if user:
             try:
                 await context.bot.send_message(
                     chat_id=user.telegram_id,
-                    text=f"❌ Order #{order.id} has been cancelled by admin.\n💰 Refund: {format_price(order.total_amount)}"
+                    text=f"❌ Order #{order.id} has been cancelled by admin."
                 )
             except:
                 pass

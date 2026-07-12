@@ -2,14 +2,10 @@
 
 from database import PaymentMethod
 
-from .cryptobot import CryptoBotProvider
 from .qris import QrisProvider
-from .telegram_card import TelegramCardProvider
 
 
 _PROVIDERS = [
-    CryptoBotProvider(),
-    TelegramCardProvider(),
     QrisProvider(),
 ]
 

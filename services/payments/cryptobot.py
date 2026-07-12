@@ -24,7 +24,7 @@ class CryptoBotProvider(PaymentProvider):
     def create_payment(self, session, user, amount: float):
         if not self.is_available():
             raise PaymentCreationError(
-                "❌ CryptoBot top-up is disabled for the current IDR wallet setup.\n\nPlease choose QRIS instead."
+                "❌ CryptoBot checkout is disabled for the current IDR payment setup.\n\nPlease choose QRIS instead."
             )
 
         existing_pending = session.query(Transaction).filter_by(

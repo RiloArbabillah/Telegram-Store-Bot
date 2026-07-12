@@ -21,6 +21,7 @@ from database.models import (
     User,
 )
 from services.payments.common import complete_transaction, is_manual_qris_expired
+from services.direct_checkout import expire_pending_checkout, release_pending_order
 
 
 class AdminOperationError(ValueError):
@@ -73,12 +74,17 @@ def cancel_order(session, order_id: int, *, admin_id: int) -> Order:
     order = session.query(Order).filter_by(id=order_id).with_for_update().first()
     if not order:
         raise AdminOperationError("Pesanan tidak ditemukan.")
-    if order.status != OrderStatus.PROCESSING:
-        raise AdminOperationError("Hanya pesanan yang sedang diproses yang dapat dibatalkan.")
-    user = session.get(User, order.user_id)
-    if not user:
-        raise AdminOperationError("Pengguna pemilik pesanan tidak ditemukan.")
-    user.wallet_balance += order.total_amount
+    if order.status not in {OrderStatus.PROCESSING, OrderStatus.PENDING_PAYMENT}:
+        raise AdminOperationError("Hanya pesanan aktif yang dapat dibatalkan.")
+    if order.status == OrderStatus.PENDING_PAYMENT:
+        released_via_transaction = False
+        for transaction in order.transactions:
+            if transaction.status == TransactionStatus.PENDING:
+                expire_pending_checkout(session, transaction.id)
+                released_via_transaction = True
+                break
+        if not released_via_transaction:
+            release_pending_order(session, order)
     order.status = OrderStatus.CANCELLED
     record_audit(
         session,
@@ -86,7 +92,7 @@ def cancel_order(session, order_id: int, *, admin_id: int) -> Order:
         action="order.cancel",
         entity_type="order",
         entity_id=order.id,
-        metadata={"refund_amount": order.total_amount},
+        metadata={"cancelled_amount": order.total_amount},
     )
     return order
 
@@ -127,7 +133,7 @@ def confirm_transaction(session, transaction_id: int, *, admin_id: int):
         action="transaction.confirm",
         entity_type="transaction",
         entity_id=transaction.id,
-        metadata={"credited_amount": notification.amount},
+        metadata={"paid_amount": notification.amount, "order_id": notification.order_id},
     )
     return notification
 
@@ -138,7 +144,13 @@ def cancel_transaction(session, transaction_id: int, *, admin_id: int) -> Transa
         raise AdminOperationError("Transaksi tidak ditemukan.")
     if transaction.status != TransactionStatus.PENDING:
         raise AdminOperationError("Transaksi ini sudah diproses.")
-    transaction.status = TransactionStatus.FAILED
+    if transaction.order_id:
+        expire_pending_checkout(session, transaction.id)
+        transaction.status = TransactionStatus.FAILED
+        if transaction.order and transaction.order.status == OrderStatus.EXPIRED:
+            transaction.order.status = OrderStatus.CANCELLED
+    else:
+        transaction.status = TransactionStatus.FAILED
     record_audit(
         session,
         admin_id=admin_id,

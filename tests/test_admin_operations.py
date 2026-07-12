@@ -30,6 +30,7 @@ from services.admin_operations import (
     restock_product,
     set_user_banned,
 )
+from services.direct_checkout import create_pending_checkout
 
 
 class AdminOperationsTests(unittest.TestCase):
@@ -38,13 +39,14 @@ class AdminOperationsTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         self.Session = sessionmaker(bind=engine)
 
-    def test_cancel_order_refunds_only_once(self):
+    def test_cancel_order_releases_pending_checkout_only_once(self):
         with self.Session.begin() as session:
-            user = User(telegram_id=10, wallet_balance=100)
-            session.add(user)
+            user = User(telegram_id=10)
+            product = Product(name="Produk", price=50, stock_count=1, product_type=ProductType.KEY)
+            session.add_all([user, product])
             session.flush()
-            order = Order(user_id=user.id, total_amount=50, status=OrderStatus.PROCESSING)
-            session.add(order)
+            session.add(ProductKey(product_id=product.id, key_value="KEY-1"))
+            order = create_pending_checkout(session, user_id=user.id, product_id=product.id, quantity=1)
             session.flush()
             order_id = order.id
 
@@ -55,16 +57,21 @@ class AdminOperationsTests(unittest.TestCase):
                 cancel_order(session, order_id, admin_id=123)
 
         with self.Session() as session:
-            self.assertEqual(session.query(User).one().wallet_balance, 150)
+            self.assertEqual(session.query(Product).one().stock_count, 1)
+            self.assertIsNone(session.query(ProductKey).one().order_id)
             self.assertEqual(session.query(AdminAuditLog).count(), 1)
 
-    def test_confirm_transaction_credits_only_once(self):
+    def test_confirm_transaction_completes_order_only_once(self):
         with self.Session.begin() as session:
-            user = User(telegram_id=10, wallet_balance=0)
-            session.add(user)
+            user = User(telegram_id=10)
+            product = Product(name="Produk", price=25000, stock_count=1, product_type=ProductType.KEY)
+            session.add_all([user, product])
             session.flush()
+            session.add(ProductKey(product_id=product.id, key_value="KEY-1"))
+            order = create_pending_checkout(session, user_id=user.id, product_id=product.id, quantity=1)
             transaction = Transaction(
                 user_id=user.id,
+                order_id=order.id,
                 amount=25000,
                 payment_method=PaymentMethod.QRIS,
                 status=TransactionStatus.PENDING,
@@ -80,7 +87,8 @@ class AdminOperationsTests(unittest.TestCase):
                 confirm_transaction(session, transaction_id, admin_id=123)
 
         with self.Session() as session:
-            self.assertEqual(session.query(User).one().wallet_balance, 25000)
+            self.assertEqual(session.query(Order).one().status, OrderStatus.COMPLETED)
+            self.assertTrue(session.query(ProductKey).one().is_sold)
 
     def test_restock_adds_keys_adjustment_and_audit(self):
         with self.Session.begin() as session:

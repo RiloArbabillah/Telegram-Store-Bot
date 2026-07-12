@@ -8,10 +8,7 @@ def create_main_menu_keyboard():
     """Create the main menu keyboard for users."""
     keyboard = [
         [InlineKeyboardButton("🛒 Products", callback_data="products")],
-        [
-            InlineKeyboardButton("💰 Top Up", callback_data="topup"),
-            InlineKeyboardButton("Order History", callback_data="order_history")
-        ],
+        [InlineKeyboardButton("Order History", callback_data="order_history")],
         [InlineKeyboardButton("📧 Cek OTP Email", callback_data="check_email_otp")],
         [InlineKeyboardButton("🚫 Cek Akun Deactivated", callback_data="check_deactivated")],
         [
@@ -90,8 +87,7 @@ def create_payment_method_keyboard(payment_options=None):
     """Create payment method selection keyboard."""
     if payment_options is None:
         payment_options = [
-            ("🪙 CryptoBot", "pay_crypto_wallet"),
-            ("💳 Card", "pay_card"),
+            ("📱 QRIS", "pay_qris"),
         ]
 
     keyboard = [

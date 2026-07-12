@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from config.settings import settings as app_settings
 from database import PaymentMethod, Settings, Transaction, TransactionStatus
+from services.direct_checkout import expire_pending_checkout
 from utils import calculate_expiry_time, format_price
 
 from .base import PaymentCreationError, PaymentPage, PaymentProvider, PaymentWebhookResult
@@ -37,11 +38,11 @@ class QrisProvider(PaymentProvider):
     def is_available(self) -> bool:
         return True
 
-    def create_payment(self, session, user, amount: float):
+    def create_payment(self, session, user, amount: float, *, order_id: int | None = None):
         if app_settings.DANA_ENABLED:
-            return self._create_dana_payment(session, user, amount)
+            return self._create_dana_payment(session, user, amount, order_id=order_id)
 
-        return self._create_manual_payment(session, user, amount)
+        return self._create_manual_payment(session, user, amount, order_id=order_id)
         settings = session.query(Settings).first()
         instructions_text = settings.qris_instructions_text.strip() if settings and settings.qris_instructions_text else ""
         image_file_id = settings.qris_image_file_id if settings and settings.qris_image_file_id else None
@@ -203,13 +204,15 @@ After you finish the transfer, send the payment proof in this chat as a photo or
             return False
         return transaction.created_at > datetime.utcnow() - timedelta(seconds=seconds)
 
-    def _create_dana_payment(self, session, user, amount: float):
-        pending_transaction = session.query(Transaction).filter_by(
+    def _create_dana_payment(self, session, user, amount: float, *, order_id: int | None = None):
+        pending_query = session.query(Transaction).filter_by(
             user_id=user.id,
             payment_method=self.method,
             status=TransactionStatus.PENDING,
             provider_name="dana_qris",
-        ).order_by(Transaction.created_at.desc()).first()
+        )
+        pending_query = pending_query.filter_by(order_id=order_id) if order_id else pending_query.filter(Transaction.order_id == None)
+        pending_transaction = pending_query.order_by(Transaction.created_at.desc()).first()
 
         if pending_transaction:
             qr_content = pending_transaction.qr_payload or "Scan the stored QRIS code."
@@ -228,6 +231,7 @@ After you finish the transfer, send the payment proof in this chat as a photo or
         partner_reference_no = self._build_partner_reference_no()
         transaction = Transaction(
             user_id=user.id,
+            order_id=order_id,
             amount=amount,
             payment_method=self.method,
             provider_name="dana_qris",
@@ -277,7 +281,7 @@ After you finish the transfer, send the payment proof in this chat as a photo or
         button_url = qr_result.qr_url or qr_result.redirect_url
         return transaction, PaymentPage(message=message, button_text="Open payment page" if button_url else None, button_url=button_url)
 
-    def _create_manual_payment(self, session, user, amount: float):
+    def _create_manual_payment(self, session, user, amount: float, *, order_id: int | None = None):
         admin_settings = session.query(Settings).first()
         instructions_text = admin_settings.qris_instructions_text.strip() if admin_settings and admin_settings.qris_instructions_text else ""
         static_payload = admin_settings.qris_static_payload.strip() if admin_settings and admin_settings.qris_static_payload else ""
@@ -289,11 +293,13 @@ After you finish the transfer, send the payment proof in this chat as a photo or
 
         self._expire_stale_manual_qris(session)
 
-        existing_pending = session.query(Transaction).filter_by(
+        existing_query = session.query(Transaction).filter_by(
             user_id=user.id,
             payment_method=self.method,
             status=TransactionStatus.PENDING,
-        ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris')).order_by(Transaction.created_at.desc()).first()
+        ).filter((Transaction.provider_name == None) | (Transaction.provider_name != 'dana_qris'))
+        existing_query = existing_query.filter_by(order_id=order_id) if order_id else existing_query.filter(Transaction.order_id == None)
+        existing_pending = existing_query.order_by(Transaction.created_at.desc()).first()
 
         if existing_pending:
             expiry_text = existing_pending.expires_at.strftime('%Y-%m-%d %H:%M:%S UTC') if existing_pending.expires_at else 'N/A'
@@ -365,6 +371,7 @@ After you finish the transfer, send the payment proof in this chat as a photo or
 
         transaction = Transaction(
             user_id=user.id,
+            order_id=order_id,
             amount=amount,
             payment_method=self.method,
             provider_name=self.provider_name,
@@ -455,7 +462,10 @@ After you finish the transfer, send the payment proof in this chat as a photo or
                     expired = True
 
             if is_manual_qris_expired(transaction, now=now):
-                transaction.status = TransactionStatus.EXPIRED
+                if transaction.order_id:
+                    expire_pending_checkout(session, transaction.id)
+                else:
+                    transaction.status = TransactionStatus.EXPIRED
                 expired = True
 
         if expired:
